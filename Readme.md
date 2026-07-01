@@ -1,50 +1,61 @@
-Make the following changes to dashboard/index.html and api.py:
+Make the following fixes to dashboard/index.html:
 
-CHANGE 1 — Opportunity Agent filters and simplified display
+FIX 1 — Remove composite score reference from summary strip
+In the Opportunities tab summary strip at the top, the 
+High Priority card currently shows "composite score ≥ 8.0" 
+as the criteria description. Remove this text entirely. 
+Just show the count number and the label "High Priority" 
+with no criteria explanation underneath. Same for the 
+other summary cards — remove any formula or calculation 
+references. Keep the numbers and labels only.
 
-Add a filter bar above the Opportunity Radar table with:
-- Dropdown to filter by Plan (all 5 plans plus All Plans option)
-- Dropdown to filter by Measure (all 4 measures plus All Measures)
-- Dropdown to filter by Priority (High, Medium, Low, All)
-- A Clear Filters button
+FIX 2 — Add back navigation between agent phases
+In the Run Session tab, add a "← Go Back" button to 
+each phase step after Phase 1. Specifically:
 
-Remove the composite Score column from the radar table.
-Replace it with just Open Gaps, Priority badge, and Stars 
-gap to close shown as current arrow target.
+Phase 2 Cohort Design — show a "← Back to Opportunity" 
+button that returns the session to Phase 1 state, clears 
+the cohort assignments from the database for this run_id 
+using DELETE /session/{run_id} and restarts from Phase 1 
+with the same opportunity pre-selected so the user can 
+choose a different one or reconfirm the same one.
 
-Add a summary strip above the filter bar showing:
-- Total open gaps in current filtered view
-- Number of High priority combinations
-- Estimated Stars impact if all filtered gaps closed
+Phase 3 Campaign Design — show a "← Back to Cohorts" 
+button that returns to Phase 2 state and clears campaign 
+data for this run_id from the database.
 
-CHANGE 2 — Campaign Agent inline editing
+Phase 4 Outreach — show a "← Back to Campaign" button 
+that returns to Phase 3 state and clears outreach data.
 
-In the Run Session tab Phase 3 campaign design step, 
-after the user selects Option 1 or Option 2, show an 
-editable campaign details card before the confirm button.
+When going back, the completed phases above should 
+change from green Completed state back to their 
+Active state with their previous options still visible 
+so the user does not have to start completely from scratch.
 
-The card should show these fields as editable inputs:
-- Primary channel (dropdown: Email, SMS, Call)
-- Fallback channel (dropdown: Email, SMS, Call, None)
-- Incentive type (dropdown: Gift Card 15, Gift Card 25, 
-  Transport Voucher, Fit Kit Mailer, None)
-- Frequency plan (text input, pre-filled from agent recommendation)
-- Message theme (text input, pre-filled from agent recommendation)
-- Member count per cohort (read only, not editable)
+Show the Go Back button in a subtle gray style so it 
+does not compete visually with the main confirm button 
+which stays teal. Position it to the left of the 
+confirm button.
 
-Show a Confirm Campaign button below the editable card.
-Any field the user edits should be highlighted in amber 
-to show it was manually changed from the AI recommendation.
-Log any manual changes in the audit trace with the note 
-"manually overridden by user" alongside the field name 
-and the original vs new value.
+FIX 3 — Add Target Cohort 2 Only option
+In Phase 2 Cohort Design, add a third button alongside 
+the existing "Target Both Cohorts" and "Target Cohort 1 Only" 
+buttons:
 
-CHANGE 3 — Member count visibility in cohort design
+Add "Target Cohort 2 Only" button with the same styling 
+as the existing cohort selection buttons.
 
-In Phase 2 cohort design, make the member count per 
-cohort much more prominent. Show it as a large number 
-at the top of each cohort card with a label like 
-"3 members targeted" in a teal badge. Also show the 
-channel fit and average propensity score prominently 
-on each cohort card so the user can see at a glance 
-who they are reaching and how.
+When selected it should behave identically to Target 
+Cohort 1 Only but targeting only the second cohort — 
+marking only Cohort 2 members as in scope in the 
+fact_nba_claude_decision table and setting Cohort 1 
+members as not targeted.
+
+Also update the cohort card highlighting — when a cohort 
+is selected it should show a teal border and a Selected 
+badge. When it is not selected it should show a grayed 
+out style so it is visually clear which cohorts are 
+active for this session.
+
+Keep all existing visual design unchanged. Only add 
+these 3 fixes.
