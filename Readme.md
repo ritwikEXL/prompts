@@ -1,81 +1,138 @@
-Update api.py to add a fallback message template 
-for the POST /send/message/{contact_id} endpoint 
-so it works without an Anthropic API key.
+Expand the CareIntel database with more realistic data volumes.
+Read the existing schema from careintel.db and the current 
+data in all tables before making any changes.
 
-Instead of calling the Claude API to generate 
-the message, generate the message text using 
-this template logic:
+STEP 1 — Add 3 new measures to dim_measure
 
-1. Read the contact details from fact_nba_outreach_plan
-2. Read member details from dim_member for that contact
-3. Read gap details from fact_member_gap for that contact
-4. Generate message text based on channel and language:
+Add these rows keeping existing 4 measures unchanged:
 
-For EMAIL channel use this template:
-Subject: Important Health Reminder from Your Medicare Plan
+M005, MAD, Medication Adherence for Diabetes, Process, 
+star_weight=2, hedis_domain=Medication Management, 
+age_gender_eligibility=Adults 18-75 with diabetes on 
+medication, clinical_description=Percentage of members 
+with diabetes who filled their diabetes medication for 
+at least 80 percent of the year, 
+nba_default_playbook=PB_MAD_STANDARD
 
-Dear [member_key],
+M006, AFV, Annual Flu Vaccine, Process, star_weight=1.5, 
+hedis_domain=Prevention and Screening, 
+age_gender_eligibility=All members 6 months and older, 
+clinical_description=Percentage of members who received 
+an influenza vaccination between July and June, 
+nba_default_playbook=PB_AFV_STANDARD
 
-This is a friendly reminder that you have an outstanding 
-[measure_name] that needs to be completed this year.
+M007, SPC, Statin Use in Persons with Cardiovascular 
+Disease, Process, star_weight=2, 
+hedis_domain=Medication Management, 
+age_gender_eligibility=Adults 21 and older with 
+cardiovascular disease, 
+clinical_description=Percentage of members with 
+cardiovascular disease who were dispensed a statin 
+medication, nba_default_playbook=PB_SPC_STANDARD
 
-As a valued member of your Medicare Advantage plan, 
-your health is our priority. Completing this important 
-health check helps us ensure you receive the best 
-possible care.
+STEP 2 — Add 80 new members to dim_member
 
-As a thank you for completing this health activity, 
-you will receive [incentive_offered].
+Add members MBR0021 through MBR0100 with realistic 
+diversity:
+- Age bands distributed across 45-49, 50-54, 55-59, 
+  60-64, 65-69, 70-74, 75-79, 80+ 
+  (weight toward 65-79 since this is Medicare)
+- Languages: 55 percent EN, 20 percent ES, 
+  15 percent ZH, 10 percent Other
+- Digital literacy: 30 percent Low, 40 percent Medium, 
+  30 percent High
+- Socioeconomic segment: 35 percent Low, 
+  40 percent Mid, 25 percent High
+- Gender: mix of M and F
+- PCP provider keys: distribute across PRV101 to PRV110
+- Birth years consistent with age bands
+- dob_year should reflect realistic Medicare age 
+  (born between 1925 and 1979)
 
-Please contact your primary care provider to schedule 
-your appointment at your earliest convenience.
+STEP 3 — Add corresponding rows to dim_member_channel_pref
 
-If you have any questions please call us at 
-1-800-MEDICARE.
+For each new member MBR0021 through MBR0100 add a 
+channel preference row with:
+- email_allowed: true for High and Mid digital literacy, 
+  false for Low digital literacy members
+- sms_allowed: true for most members except very elderly 
+  (80+ age band) Low digital literacy
+- call_allowed: true for all members
+- preferred_channel: EMAIL for High digital literacy, 
+  SMS for Mid digital literacy EN speakers, 
+  CALL for Low digital literacy and non-English speakers 
+  who are elderly
+- do_not_contact_flag: false for all except 3 random 
+  members (to maintain realistic Do Not Contact rate)
+- channel_risk_notes: realistic notes matching the 
+  member profile
 
-Thank you for taking care of your health.
+STEP 4 — Add 200 new gap rows to fact_member_gap
 
-Warm regards,
-CareIntel Health Outreach Team
+Add gap rows G00051 through G00250 covering all 7 
+measures across all 5 plans. Distribute as follows:
 
-For SMS channel use this template (under 160 characters):
-Hi [member_key], reminder: complete your [measure_code] 
-this year and receive [incentive_offered]. 
-Call 1-800-MEDICARE to schedule. Reply STOP to opt out.
+Per measure distribution:
+- BCS (Breast Cancer Screening): 25 gaps
+- COL (Colorectal Cancer Screening): 30 gaps
+- EED (Eye Exam for Patients with Diabetes): 35 gaps
+- CDC (Controlling Blood Pressure): 35 gaps
+- MAD (Medication Adherence for Diabetes): 40 gaps
+- AFV (Annual Flu Vaccine): 20 gaps
+- SPC (Statin Use): 15 gaps
 
-For Mandarin SMS use this template:
-您好 [member_key], 提醒您今年完成[measure_code]检查, 
-可获得[incentive_offered]。请致电1-800-MEDICARE预约。
-回复STOP退订。
+Per plan distribution spread realistically across 
+all 5 plans with P003 (3.0 stars) and P005 (2.5 stars) 
+having proportionally more open gaps since they are 
+the most at-risk plans.
 
-For Spanish SMS use this template:
-Hola [member_key], recordatorio: complete su 
-[measure_code] este año y reciba [incentive_offered]. 
-Llame al 1-800-MEDICARE para programar. 
-Responda STOP para cancelar.
+For each gap row:
+- gap_status: 50 percent Open, 20 percent Borderline, 
+  20 percent Partial, 10 percent Closed
+- gap_open_date: between 2026-01-01 and 2026-04-01
+- days_open: calculated from gap_open_date to today
+- clinical_risk_score: between 0.3 and 0.9, 
+  higher for chronic condition measures 
+  (CDC, MAD, SPC, EED)
+- nba_propensity_score: between 0.3 and 0.85
+- previous_year_gap_flag: true for 30 percent of gaps
+- upstream_recommended_channel: distribute across 
+  EMAIL, SMS, CALL based on member channel preference
+- upstream_recommended_incentive: 
+  GIFTCARD_15 for high propensity digital members,
+  GIFTCARD_25 for medium propensity,
+  TRANSPORT_VOUCHER for low socioeconomic members,
+  FIT_KIT_MAILER for COL measure members,
+  NONE for already partially compliant members
+- upstream_recommended_priority: High for clinical 
+  risk above 0.7, Medium for 0.5 to 0.7, Low below
+- last_outreach_date: null for most, 
+  some with dates in last 90 days
+- last_outreach_channel: matching upstream channel 
+  where last_outreach_date is not null
+- is_suppressed: true only for Do Not Contact members
 
-For CALL channel use the same SMS template since 
-we are sending to a test SMS number.
+STEP 5 — Verify the data
 
-Replace [member_key], [measure_name], [measure_code], 
-and [incentive_offered] with actual values from 
-the database for that contact.
+After inserting everything run these counts and 
+show me the results:
 
-After generating the message text proceed with 
-sending via SendGrid for EMAIL or Twilio for SMS 
-exactly as before.
+SELECT COUNT(*) FROM dim_member
+SELECT COUNT(*) FROM dim_member_channel_pref  
+SELECT COUNT(*) FROM dim_measure
+SELECT COUNT(*) FROM fact_member_gap
+SELECT gap_status, COUNT(*) FROM fact_member_gap 
+GROUP BY gap_status
+SELECT measure_code, COUNT(*) FROM fact_member_gap 
+GROUP BY measure_code
+SELECT plan_key, COUNT(*) FROM fact_member_gap 
+GROUP BY plan_key
+SELECT COUNT(*) FROM fact_member_gap 
+WHERE is_suppressed = 0 AND gap_status != 'Closed'
 
-Add a note in the API response indicating 
-"message_source: template" so we know it used 
-the fallback template rather than Claude generation.
+The last query should show roughly 180 to 200 
+addressable open gaps.
 
-Later when ANTHROPIC_API_KEY is available in .env 
-the code should automatically switch to Claude 
-generated messages instead of the template. 
-Check if ANTHROPIC_API_KEY exists in environment 
-variables — if yes use Claude, if no use template.
-
-After updating restart uvicorn and test by calling 
-POST /send/message/ for the first PLANNED contact 
-in the latest run. Show me the generated message 
-text and confirm it sent successfully.
+Keep all existing data completely unchanged. 
+Only add new rows. Never modify or delete 
+existing members, gaps, or measures.
