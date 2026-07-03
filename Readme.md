@@ -1,17 +1,25 @@
-Query the database and show me the details of 
-the 2 failed contacts from the latest run:
+3 failed contacts total. Here's the breakdown:
 
-SELECT o.contact_id, o.member_gap_key, o.channel, 
-o.status, o.generated_message, g.member_key, 
-m.language_preference, m.digital_literacy_segment,
-p.preferred_channel, p.sms_allowed, p.email_allowed,
-p.do_not_contact_flag
-FROM fact_nba_outreach_plan o
-JOIN fact_member_gap g ON o.member_gap_key = g.member_gap_key
-JOIN dim_member m ON g.member_key = m.member_key
-JOIN dim_member_channel_pref p ON m.member_key = p.member_key
-WHERE o.status = 'FAILED'
-ORDER BY o.created_timestamp DESC
-LIMIT 5
+Record 1 — CT_162441_004
 
-Show me the full output.
+Member: MBR0008 · EN · High digital literacy · preferred EMAIL
+Gap: G00055 · BCS · Channel assigned: SMS
+Message generated: ✓ (Hi MBR0008, reminder: complete your BCS…)
+Root cause: Twilio SMS delivery failed — likely the same SSL cert issue or a Twilio API error. Note the member prefers EMAIL but was assigned SMS (possible cohort channel mismatch).
+Record 2 — CT_162441_006
+
+Member: MBR0013 · EN · High digital literacy · preferred EMAIL
+Gap: G00058 · BCS · Channel assigned: SMS
+Message generated: ✓ (same BCS template)
+Root cause: Same as Record 1. Again, preferred channel is EMAIL but routed via SMS.
+Record 3 — CT_043822_001
+
+Member: MBR0004 · EN · High digital literacy · preferred EMAIL
+Gap: G00024 · COL · Channel: EMAIL
+Message generated: ✓ (full email template)
+Root cause: This is the original SSL cert failure from an earlier session (before the SSL fix was applied). Now resolved.
+Two actionable findings:
+
+Records 1 & 2 — Both are High digital literacy, EMAIL-preferred members being routed to SMS by the cohort logic. The C1_DIGITAL_HIGH_PROP branch prefers EMAIL first (chan.email_allowed==='true'?'EMAIL':...) so something in the campaign config overrode this. Worth checking whether the campaign's fallback channel was set to SMS and why it landed on these two members.
+Record 3 — Historical pre-fix failure, no action needed. The same contact was re-sent successfully in a later run.
+Want me to retry the two SMS failures, or investigate why those EMAIL-preferred members were assigned SMS?
