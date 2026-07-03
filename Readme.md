@@ -1,138 +1,79 @@
-Expand the CareIntel database with more realistic data volumes.
-Read the existing schema from careintel.db and the current 
-data in all tables before making any changes.
+Make the following changes to dashboard/index.html 
+and api.py:
 
-STEP 1 — Add 3 new measures to dim_measure
+CHANGE 1 — Integrate Send into Outreach confirmation
 
-Add these rows keeping existing 4 measures unchanged:
+In the Run Session tab Phase 4 Outreach Agent:
 
-M005, MAD, Medication Adherence for Diabetes, Process, 
-star_weight=2, hedis_domain=Medication Management, 
-age_gender_eligibility=Adults 18-75 with diabetes on 
-medication, clinical_description=Percentage of members 
-with diabetes who filled their diabetes medication for 
-at least 80 percent of the year, 
-nba_default_playbook=PB_MAD_STANDARD
+For MANUAL MODE:
+Keep the current behavior — show the outreach plan 
+table with individual Send buttons and a Send All 
+button. The user reviews and sends separately after 
+confirming the plan. Add a clear label above the 
+table saying "Review your outreach plan below. 
+Click Send All when ready to deliver messages."
 
-M006, AFV, Annual Flu Vaccine, Process, star_weight=1.5, 
-hedis_domain=Prevention and Screening, 
-age_gender_eligibility=All members 6 months and older, 
-clinical_description=Percentage of members who received 
-an influenza vaccination between July and June, 
-nba_default_playbook=PB_AFV_STANDARD
+For AUTOMATED MODE:
+After the Outreach Agent writes the plan, 
+automatically trigger POST /send/all/{run_id} 
+immediately after the plan is confirmed without 
+any user interaction. Show a real time delivery 
+status panel that updates as each message is sent:
 
-M007, SPC, Statin Use in Persons with Cardiovascular 
-Disease, Process, star_weight=2, 
-hedis_domain=Medication Management, 
-age_gender_eligibility=Adults 21 and older with 
-cardiovascular disease, 
-clinical_description=Percentage of members with 
-cardiovascular disease who were dispensed a statin 
-medication, nba_default_playbook=PB_SPC_STANDARD
+Show a delivery progress section with:
+- A progress bar showing X of Y messages sent
+- Each contact row updating from PLANNED to 
+  SENT in real time as messages go out
+- A small WhatsApp icon for WhatsApp messages 
+  and email icon for email messages
+- Green checkmark when delivered
+- Red X if failed with error reason
 
-STEP 2 — Add 80 new members to dim_member
+After all messages sent show a final summary:
+"Session complete — X WhatsApp messages sent, 
+Y emails sent, Z calls scheduled"
 
-Add members MBR0021 through MBR0100 with realistic 
-diversity:
-- Age bands distributed across 45-49, 50-54, 55-59, 
-  60-64, 65-69, 70-74, 75-79, 80+ 
-  (weight toward 65-79 since this is Medicare)
-- Languages: 55 percent EN, 20 percent ES, 
-  15 percent ZH, 10 percent Other
-- Digital literacy: 30 percent Low, 40 percent Medium, 
-  30 percent High
-- Socioeconomic segment: 35 percent Low, 
-  40 percent Mid, 25 percent High
-- Gender: mix of M and F
-- PCP provider keys: distribute across PRV101 to PRV110
-- Birth years consistent with age bands
-- dob_year should reflect realistic Medicare age 
-  (born between 1925 and 1979)
+CHANGE 2 — Call scheduling instead of real calls
 
-STEP 3 — Add corresponding rows to dim_member_channel_pref
+For any contact with channel = CALL, Spanish Call, 
+or Mandarin Call:
+- Do not attempt to make a real phone call
+- Instead mark status as SCHEDULED 
+  (different from PLANNED and SENT)
+- Generate the call script using the same 
+  template as SMS but formatted for a phone 
+  conversation with greeting and closing
+- Show a phone icon with SCHEDULED badge 
+  in amber color (different from green SENT)
+- In the message preview show the full call 
+  script that would be read to the member
+- In the audit trace log: 
+  "Call scheduled for [member] — 
+  script generated, pending care manager assignment"
 
-For each new member MBR0021 through MBR0100 add a 
-channel preference row with:
-- email_allowed: true for High and Mid digital literacy, 
-  false for Low digital literacy members
-- sms_allowed: true for most members except very elderly 
-  (80+ age band) Low digital literacy
-- call_allowed: true for all members
-- preferred_channel: EMAIL for High digital literacy, 
-  SMS for Mid digital literacy EN speakers, 
-  CALL for Low digital literacy and non-English speakers 
-  who are elderly
-- do_not_contact_flag: false for all except 3 random 
-  members (to maintain realistic Do Not Contact rate)
-- channel_risk_notes: realistic notes matching the 
-  member profile
+CHANGE 3 — Message preview before Send in manual mode
 
-STEP 4 — Add 200 new gap rows to fact_member_gap
+In the Outreach Plan table, before the user clicks 
+Send on any row, show a preview of the message 
+that will be sent. When the outreach plan is first 
+generated, automatically call the message generation 
+logic for each contact and show the preview text 
+in an expandable row below each contact. 
+Label it "Message Preview" in gray italic text.
+The user can read the preview and then click Send 
+to deliver.
 
-Add gap rows G00051 through G00250 covering all 7 
-measures across all 5 plans. Distribute as follows:
+CHANGE 4 — Delivery status persistence
 
-Per measure distribution:
-- BCS (Breast Cancer Screening): 25 gaps
-- COL (Colorectal Cancer Screening): 30 gaps
-- EED (Eye Exam for Patients with Diabetes): 35 gaps
-- CDC (Controlling Blood Pressure): 35 gaps
-- MAD (Medication Adherence for Diabetes): 40 gaps
-- AFV (Annual Flu Vaccine): 20 gaps
-- SPC (Statin Use): 15 gaps
+After messages are sent, store the delivery 
+timestamp and status in the database. When the 
+user comes back to a previous session via 
+Session History, show the actual sent messages 
+with their delivery status and timestamps rather 
+than showing PLANNED status for already sent messages.
 
-Per plan distribution spread realistically across 
-all 5 plans with P003 (3.0 stars) and P005 (2.5 stars) 
-having proportionally more open gaps since they are 
-the most at-risk plans.
+Update the GET /session/{run_id}/status endpoint 
+to return sent_at timestamp and generated_message 
+for each contact row.
 
-For each gap row:
-- gap_status: 50 percent Open, 20 percent Borderline, 
-  20 percent Partial, 10 percent Closed
-- gap_open_date: between 2026-01-01 and 2026-04-01
-- days_open: calculated from gap_open_date to today
-- clinical_risk_score: between 0.3 and 0.9, 
-  higher for chronic condition measures 
-  (CDC, MAD, SPC, EED)
-- nba_propensity_score: between 0.3 and 0.85
-- previous_year_gap_flag: true for 30 percent of gaps
-- upstream_recommended_channel: distribute across 
-  EMAIL, SMS, CALL based on member channel preference
-- upstream_recommended_incentive: 
-  GIFTCARD_15 for high propensity digital members,
-  GIFTCARD_25 for medium propensity,
-  TRANSPORT_VOUCHER for low socioeconomic members,
-  FIT_KIT_MAILER for COL measure members,
-  NONE for already partially compliant members
-- upstream_recommended_priority: High for clinical 
-  risk above 0.7, Medium for 0.5 to 0.7, Low below
-- last_outreach_date: null for most, 
-  some with dates in last 90 days
-- last_outreach_channel: matching upstream channel 
-  where last_outreach_date is not null
-- is_suppressed: true only for Do Not Contact members
-
-STEP 5 — Verify the data
-
-After inserting everything run these counts and 
-show me the results:
-
-SELECT COUNT(*) FROM dim_member
-SELECT COUNT(*) FROM dim_member_channel_pref  
-SELECT COUNT(*) FROM dim_measure
-SELECT COUNT(*) FROM fact_member_gap
-SELECT gap_status, COUNT(*) FROM fact_member_gap 
-GROUP BY gap_status
-SELECT measure_code, COUNT(*) FROM fact_member_gap 
-GROUP BY measure_code
-SELECT plan_key, COUNT(*) FROM fact_member_gap 
-GROUP BY plan_key
-SELECT COUNT(*) FROM fact_member_gap 
-WHERE is_suppressed = 0 AND gap_status != 'Closed'
-
-The last query should show roughly 180 to 200 
-addressable open gaps.
-
-Keep all existing data completely unchanged. 
-Only add new rows. Never modify or delete 
-existing members, gaps, or measures.
+Keep all existing visual design unchanged.
