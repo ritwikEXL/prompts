@@ -1,293 +1,114 @@
-Build a 5th agent called the Evaluation Agent and 
-add it to the CareIntel system.
+The Re-Evaluate button in the Evaluation tab is 
+failing with "Failed to fetch" error. 
 
-STEP 1 — Create agents/evaluation-agent.md
+Fix two things:
 
-Create a new agent instructions file with this content:
+1. Make sure the POST /evaluate/{run_id} endpoint 
+   is working correctly. Test it by calling it 
+   for the first run_id in the campaign_evaluations 
+   table and show me the response.
 
-# Evaluation Agent
+2. Update the Re-Evaluate button in dashboard/index.html 
+   to handle errors gracefully:
+   - Show a loading spinner while evaluation runs
+   - If fetch fails show a specific error message 
+     like "API server offline - please restart" 
+     instead of generic "Failed to fetch"
+   - Add a retry mechanism - if first attempt fails 
+     wait 2 seconds and try once more automatically
+   - After successful re-evaluation refresh only 
+     that campaign row without reloading the full 
+     page
 
-## Role
-A healthcare campaign performance analyst that monitors 
-active outreach campaigns, tracks gap closure rates 
-against expected targets, and recommends corrective 
-actions for underperforming campaigns.
+3. Also fix the Run Scheduled button in the top 
+   right - make sure it calls 
+   POST /evaluate/run-scheduled correctly and 
+   shows a success message with how many 
+   evaluations were run.
 
-## Key Responsibilities
-- Monitor gap closure status for all members who 
-  received outreach
-- Compare actual closure rate vs expected closure 
-  rate from the campaign design
-- Flag campaigns that are underperforming after 
-  defined evaluation windows (7 days, 14 days, 30 days)
-- Recommend specific corrective actions per member 
-  based on their profile and response pattern
-- Calculate updated Stars impact projection based 
-  on actual vs predicted performance
-- Generate evaluation summary reports per campaign
+Restart uvicorn and test the Re-Evaluate button 
+again after fixing.
 
-## Evaluation Windows
-- Day 7 check — early signal, expect 20 percent 
-  of closures to have happened
-- Day 14 check — mid campaign, expect 50 percent 
-  of closures
-- Day 30 check — final evaluation, full closure 
-  rate assessment
 
-## Performance Thresholds
-- On track — actual closure rate within 10 percent 
-  of expected
-- Underperforming — actual closure rate more than 
-  10 percent below expected
-- Overperforming — actual closure rate more than 
-  10 percent above expected
+Add a member outcome simulation feature to make 
+the Evaluation Agent meaningful during testing 
+without a real claims feed.
 
-## Corrective Action Menu
-- ESCALATE_INCENTIVE — increase gift card amount 
-  by $10 for non-responders
-- SWITCH_CHANNEL — try a different outreach channel 
-  if member has not responded on current channel
-- CARE_MANAGER_CALL — escalate to human care manager 
-  for high risk members who have not responded
-- EXTEND_CAMPAIGN — add 2 more weeks to the campaign 
-  window for borderline members
-- CLOSE_CAMPAIGN — close the campaign if closure 
-  rate is above 80 percent
-- NO_ACTION — member already closed gap or opted out
+CHANGE 1 — Add outcome recording to member 
+evaluation detail view
 
-## Output
-For each evaluated campaign produce:
-- Overall performance status (On Track, Underperforming, 
-  Overperforming)
-- Per member status and recommended next action
-- Updated Stars impact projection
-- Executive summary suitable for a VP of Quality
+In the Evaluation tab when Show Member Detail 
+is expanded for a campaign, add an outcome 
+column to each member row with these options:
 
-STEP 2 — Add evaluation tables to careintel.db
+A dropdown or button group with:
+- Gap Closed — member completed the care activity
+- No Response — member received outreach but did 
+  not respond
+- Wrong Number — outreach could not reach member
+- Already Completed — member had already completed 
+  before outreach
+- Opted Out — member requested no further contact
 
-Run these SQL statements to add new tables:
+When the user selects an outcome:
+1. Update gap_status in fact_member_gap to:
+   - Closed if outcome is Gap Closed or 
+     Already Completed
+   - Open if outcome is No Response
+   - Suppressed if outcome is Opted Out
+2. Update fact_nba_outreach_plan status to:
+   - COMPLETED if Gap Closed or Already Completed
+   - NO_RESPONSE if No Response
+   - UNREACHABLE if Wrong Number
+   - OPTED_OUT if Opted Out
+3. Log in fact_nba_trace:
+   "Outcome recorded for [member_key]: [outcome] 
+   on [date] — gap [member_gap_key] status 
+   updated to [new_status]"
+4. Immediately trigger a re-evaluation of that 
+   campaign by calling POST /evaluate/{run_id}
+5. Update the campaign row in real time — 
+   closure rate, performance status, and Stars 
+   impact should all recalculate and update 
+   on screen without page refresh
 
-CREATE TABLE IF NOT EXISTS campaign_evaluations (
-    evaluation_id TEXT PRIMARY KEY,
-    nba_run_id TEXT,
-    campaign_id TEXT,
-    evaluation_date TEXT,
-    evaluation_window INTEGER,
-    total_members_contacted INTEGER,
-    gaps_closed_actual INTEGER,
-    gaps_closed_expected INTEGER,
-    actual_closure_rate REAL,
-    expected_closure_rate REAL,
-    performance_status TEXT,
-    stars_impact_actual REAL,
-    stars_impact_projected REAL,
-    executive_summary TEXT,
-    created_timestamp TEXT
-)
+Add a new API endpoint for this:
+POST /outcome/{contact_id}
+Body: outcome (one of the 5 options above)
+Does all 4 database updates above and returns 
+updated campaign evaluation.
 
-CREATE TABLE IF NOT EXISTS member_evaluations (
-    member_eval_id TEXT PRIMARY KEY,
-    evaluation_id TEXT,
-    nba_run_id TEXT,
-    contact_id TEXT,
-    member_gap_key TEXT,
-    member_key TEXT,
-    outreach_sent_date TEXT,
-    gap_status_at_evaluation TEXT,
-    days_since_outreach INTEGER,
-    responded INTEGER DEFAULT 0,
-    recommended_action TEXT,
-    action_reason TEXT,
-    follow_up_scheduled TEXT,
-    created_timestamp TEXT
-)
+CHANGE 2 — Add outcome summary to campaign row
 
-CREATE TABLE IF NOT EXISTS evaluation_schedule (
-    schedule_id TEXT PRIMARY KEY,
-    nba_run_id TEXT,
-    campaign_id TEXT,
-    scheduled_date TEXT,
-    evaluation_window INTEGER,
-    status TEXT DEFAULT 'PENDING',
-    created_timestamp TEXT
-)
+In the campaign performance table add a new 
+column called Outcomes showing:
+X closed / Y no response / Z pending
+In small colored text — green for closed, 
+red for no response, gray for pending
 
-STEP 3 — Add evaluation endpoints to api.py
+CHANGE 3 — Add a simulation panel for testing
 
-Add these new endpoints:
+Add a small collapsible panel at the top of 
+the Evaluation tab called "Outcome Simulation 
+(Testing Only)" with a yellow background.
 
-POST /evaluate/{run_id}
-Manually trigger evaluation for a specific run.
-1. Read all contacts from fact_nba_outreach_plan 
-   for this run_id where status = SENT
-2. For each contact check current gap_status in 
-   fact_member_gap
-3. If gap_status = Closed mark member as responded
-4. Calculate actual closure rate vs expected 
-   closure rate from dim_nba_campaign
-5. Determine performance status based on thresholds
-6. For each non-responding member determine 
-   recommended action based on:
-   - Days since outreach sent
-   - Member digital literacy and socioeconomic segment
-   - Clinical risk score from fact_member_gap
-   - Whether they have consented to alternative channels
-7. Generate executive summary text
-8. Write results to campaign_evaluations and 
-   member_evaluations tables
-9. Auto-schedule next evaluation based on 
-   evaluation window (if day 7 check passes, 
-   schedule day 14 check automatically)
-10. Return full evaluation report as JSON
+It shows:
+- A dropdown to select a run_id
+- A button "Simulate 50 percent response rate" 
+  that randomly marks half the contacted members 
+  as Gap Closed and half as No Response
+- A button "Simulate 80 percent response rate" 
+  for a high performing campaign simulation
+- A button "Simulate 20 percent response rate" 
+  for an underperforming campaign simulation
+- A Reset All Outcomes button that sets all 
+  members back to pending
 
-GET /evaluate/{run_id}/latest
-Return the most recent evaluation for a run_id
-including campaign level and member level results.
+This lets you demo different scenarios to 
+Ankit without manually clicking each member.
 
-GET /evaluate/all
-Return evaluations for all runs summarized 
-at campaign level — for the portfolio overview.
+After running simulation automatically 
+re-evaluate all affected campaigns and 
+refresh the dashboard.
 
-POST /evaluate/schedule/{run_id}
-Schedule automatic evaluations at day 7, 14, 
-and 30 after outreach was sent.
-Write 3 rows to evaluation_schedule table with 
-scheduled_dates calculated from the sent_at 
-timestamp of the first outreach contact.
-
-GET /evaluate/schedule/due
-Return all evaluations that are due today or 
-overdue — where scheduled_date <= today and 
-status = PENDING.
-This endpoint is called by the auto-scheduler.
-
-POST /evaluate/run-scheduled
-Trigger all due evaluations from evaluation_schedule.
-For each due evaluation call POST /evaluate/{run_id}.
-Update evaluation_schedule status to COMPLETED.
-Return summary of how many evaluations were run.
-
-STEP 4 — Add auto-scheduler to api.py
-
-Add a background scheduler using Python's 
-threading module that runs every 24 hours 
-and calls POST /evaluate/run-scheduled automatically.
-
-Start the scheduler when uvicorn starts up.
-Log to console each time the scheduler runs:
-"Auto-evaluation scheduler running — checking 
-for due evaluations"
-
-STEP 5 — Add Evaluation tab to dashboard
-
-Add a new tab called "Evaluation" between 
-Opportunities and Run Session in the navigation bar.
-
-The Evaluation tab has three sections:
-
-SECTION 1 — Portfolio evaluation summary strip
-4 stat cards at the top:
-- Active campaigns being monitored
-- Average closure rate across all campaigns
-- Campaigns on track (green)
-- Campaigns needing attention (red)
-
-SECTION 2 — Campaign performance table
-One row per evaluated campaign showing:
-- Run ID and date
-- Measure and plan
-- Members contacted
-- Expected closure rate vs actual closure rate 
-  shown as two colored bars side by side
-- Performance status badge: 
-  On Track (green), Underperforming (red), 
-  Overperforming (teal)
-- Stars impact actual vs projected
-- Last evaluated date
-- Evaluate Now button that calls 
-  POST /evaluate/{run_id}
-- View Details button that expands member 
-  level results below
-
-SECTION 3 — Member level evaluation detail
-Shown when View Details is clicked on a campaign row.
-Shows one row per member contacted with:
-- Member ID
-- Gap measure
-- Outreach channel and date sent
-- Days since outreach with urgency color coding:
-  Green for 0-7 days, Amber for 8-14 days, 
-  Red for 15+ days
-- Current gap status (Open, Closed, Partial)
-- Responded indicator (yes/no with icon)
-- Recommended action badge with color coding:
-  Teal for CLOSE_CAMPAIGN
-  Green for NO_ACTION
-  Amber for ESCALATE_INCENTIVE or EXTEND_CAMPAIGN
-  Orange for SWITCH_CHANNEL
-  Red for CARE_MANAGER_CALL
-- Take Action button that implements the 
-  recommended action
-
-SECTION 4 — Auto-evaluation status
-A small panel at the bottom showing:
-- Next scheduled auto-evaluation date and time
-- Last time auto-scheduler ran
-- Number of pending evaluations in queue
-- A Run All Due Evaluations Now button that 
-  calls POST /evaluate/run-scheduled
-
-STEP 6 — Integrate evaluation into session completion
-
-When a session completes in Run Session tab 
-(both manual and automated mode):
-Automatically call POST /evaluate/schedule/{run_id} 
-to schedule the day 7, 14, and 30 evaluations.
-Show a small notice below the Session Complete 
-banner saying:
-"Evaluation scheduled — this campaign will be 
-automatically evaluated on [date+7], [date+14], 
-and [date+30]"
-
-STEP 7 — Connect evaluation to gap closing
-
-When the Evaluation Agent determines a member 
-has responded (gap is now Closed):
-Update fact_member_gap gap_status to Closed 
-if not already done.
-Update fact_nba_outreach_plan status to COMPLETED 
-for that contact.
-Log in fact_nba_trace:
-"Gap closed confirmed for [member_key] — 
-[measure_code] gap [member_gap_key] closed 
-following outreach on [sent_date]"
-
-STEP 8 — Simulate some historical evaluation data
-
-To make the Evaluation tab look populated on first load,
-simulate evaluation data for the existing runs in 
-the database:
-
-For each run_id in fact_nba_trace:
-- Create a campaign_evaluation record
-- Set evaluation_window to 7
-- Set gaps_closed_actual to a realistic number 
-  (between 30 and 70 percent of members contacted)
-- Calculate performance_status based on thresholds
-- Generate a realistic executive summary
-- Create member_evaluation records for each contact
-
-This gives the Evaluation tab real data to display 
-immediately rather than showing empty state.
-
-After all changes:
-1. Restart uvicorn
-2. Call GET /evaluate/all and show me the response
-3. Call GET /evaluate/schedule/due and show me 
-   any due evaluations
-4. Open dashboard at http://localhost:8080/dashboard/
-5. Click the Evaluation tab and confirm it loads
-6. Show me a screenshot description of what appears
-
-Keep all existing visual design and functionality 
-completely unchanged.
+Keep all existing visual design unchanged.
