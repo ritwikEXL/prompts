@@ -1,114 +1,182 @@
-The Re-Evaluate button in the Evaluation tab is 
-failing with "Failed to fetch" error. 
+Make two important fixes to the CareIntel system:
 
-Fix two things:
+FIX 1 — Stop auto-closing gaps when outreach is sent
 
-1. Make sure the POST /evaluate/{run_id} endpoint 
-   is working correctly. Test it by calling it 
-   for the first run_id in the campaign_evaluations 
-   table and show me the response.
+Currently in api.py the POST /send/message/{contact_id} 
+endpoint closes the gap in fact_member_gap when a 
+message is sent. This is incorrect — sending a message 
+does not mean the member completed their care activity.
 
-2. Update the Re-Evaluate button in dashboard/index.html 
-   to handle errors gracefully:
-   - Show a loading spinner while evaluation runs
-   - If fetch fails show a specific error message 
-     like "API server offline - please restart" 
-     instead of generic "Failed to fetch"
-   - Add a retry mechanism - if first attempt fails 
-     wait 2 seconds and try once more automatically
-   - After successful re-evaluation refresh only 
-     that campaign row without reloading the full 
-     page
+Remove the gap closing logic from POST /send/message 
+and POST /send/all endpoints entirely.
 
-3. Also fix the Run Scheduled button in the top 
-   right - make sure it calls 
-   POST /evaluate/run-scheduled correctly and 
-   shows a success message with how many 
-   evaluations were run.
+Gaps should only close through two ways:
+1. Manual outcome recording (which we will add next)
+2. The WhatsApp reply webhook flow (which we build below)
 
-Restart uvicorn and test the Re-Evaluate button 
-again after fixing.
+Update the outreach plan status from PLANNED to SENT 
+when message is delivered — but do NOT update gap_status.
 
+FIX 2 — Add WhatsApp reply webhook for conversational flow
 
-Add a member outcome simulation feature to make 
-the Evaluation Agent meaningful during testing 
-without a real claims feed.
+Add a new table to careintel.db:
 
-CHANGE 1 — Add outcome recording to member 
-evaluation detail view
+CREATE TABLE IF NOT EXISTS whatsapp_conversations (
+    conversation_id TEXT PRIMARY KEY,
+    member_gap_key TEXT,
+    contact_id TEXT,
+    nba_run_id TEXT,
+    member_phone TEXT,
+    conversation_state TEXT DEFAULT 'OUTREACH_SENT',
+    appointment_date TEXT,
+    follow_up_sent INTEGER DEFAULT 0,
+    gap_closed INTEGER DEFAULT 0,
+    created_timestamp TEXT,
+    last_updated TEXT
+)
 
-In the Evaluation tab when Show Member Detail 
-is expanded for a campaign, add an outcome 
-column to each member row with these options:
+Conversation states:
+OUTREACH_SENT — initial outreach sent, waiting for reply
+AWAITING_DATE — member said yes, waiting for date
+DATE_CONFIRMED — appointment date received
+FOLLOW_UP_SENT — follow up sent after appointment date
+COMPLETED — member confirmed they completed the activity
+DECLINED — member said no or not yet after follow up
+ESCALATED — no response after follow up, sent to care manager
 
-A dropdown or button group with:
-- Gap Closed — member completed the care activity
-- No Response — member received outreach but did 
-  not respond
-- Wrong Number — outreach could not reach member
-- Already Completed — member had already completed 
-  before outreach
-- Opted Out — member requested no further contact
+Add a new FastAPI endpoint:
 
-When the user selects an outcome:
-1. Update gap_status in fact_member_gap to:
-   - Closed if outcome is Gap Closed or 
-     Already Completed
-   - Open if outcome is No Response
-   - Suppressed if outcome is Opted Out
-2. Update fact_nba_outreach_plan status to:
-   - COMPLETED if Gap Closed or Already Completed
-   - NO_RESPONSE if No Response
-   - UNREACHABLE if Wrong Number
-   - OPTED_OUT if Opted Out
-3. Log in fact_nba_trace:
-   "Outcome recorded for [member_key]: [outcome] 
-   on [date] — gap [member_gap_key] status 
-   updated to [new_status]"
-4. Immediately trigger a re-evaluation of that 
-   campaign by calling POST /evaluate/{run_id}
-5. Update the campaign row in real time — 
-   closure rate, performance status, and Stars 
-   impact should all recalculate and update 
-   on screen without page refresh
+POST /webhook/whatsapp
+This is the Twilio webhook endpoint that receives 
+incoming WhatsApp replies from members.
 
-Add a new API endpoint for this:
-POST /outcome/{contact_id}
-Body: outcome (one of the 5 options above)
-Does all 4 database updates above and returns 
-updated campaign evaluation.
+It receives Twilio's standard webhook POST with fields:
+From, To, Body (the message text)
 
-CHANGE 2 — Add outcome summary to campaign row
+Handle these conversation states:
 
-In the campaign performance table add a new 
-column called Outcomes showing:
-X closed / Y no response / Z pending
-In small colored text — green for closed, 
-red for no response, gray for pending
+STATE: OUTREACH_SENT
+If member replies with any of: yes, yeah, sure, ok, 
+okay, will do, i will, going, scheduled (case insensitive)
+→ Update state to AWAITING_DATE
+→ Reply via Twilio: "Great! What date are you planning 
+   to go? Please reply with the date (e.g. July 15)"
 
-CHANGE 3 — Add a simulation panel for testing
+If member replies with any of: no, cant, cannot, busy, 
+later, not now, maybe later
+→ Update state to DECLINED
+→ Reply: "No problem! We will check back with you 
+   in 2 weeks. Your health matters to us."
+→ Schedule a follow up message 14 days later
 
-Add a small collapsible panel at the top of 
-the Evaluation tab called "Outcome Simulation 
-(Testing Only)" with a yellow background.
+If member replies with STOP or unsubscribe
+→ Update dim_member_channel_pref set do_not_contact_flag 
+   to true for this member
+→ Update state to DECLINED
+→ Reply: "You have been unsubscribed from health 
+   reminders. Reply START to resubscribe anytime."
 
-It shows:
-- A dropdown to select a run_id
-- A button "Simulate 50 percent response rate" 
-  that randomly marks half the contacted members 
-  as Gap Closed and half as No Response
-- A button "Simulate 80 percent response rate" 
-  for a high performing campaign simulation
-- A button "Simulate 20 percent response rate" 
-  for an underperforming campaign simulation
-- A Reset All Outcomes button that sets all 
-  members back to pending
+STATE: AWAITING_DATE
+Parse the member's reply for a date. Accept formats like:
+July 15, 15th July, 15/07, 07/15, next Monday, tomorrow,
+this week, next week
 
-This lets you demo different scenarios to 
-Ankit without manually clicking each member.
+If a date is found:
+→ Store as appointment_date in whatsapp_conversations
+→ Update state to DATE_CONFIRMED
+→ Schedule a follow up message for appointment_date + 3 days
+→ Reply: "Perfect! We have noted your appointment 
+   for [date]. We will check in with you a few days 
+   after to see how it went. Good luck!"
 
-After running simulation automatically 
-re-evaluate all affected campaigns and 
-refresh the dashboard.
+If no date found:
+→ Reply: "Thanks! Could you share the date you are 
+   planning to go? For example: July 15"
 
-Keep all existing visual design unchanged.
+STATE: DATE_CONFIRMED (follow up triggered by scheduler)
+When appointment_date + 3 days arrives, send:
+"Hi! We wanted to check in — did you manage to 
+complete your [measure_name] appointment? 
+Reply YES if completed or NO if not yet."
+→ Update state to FOLLOW_UP_SENT
+→ Update follow_up_sent to 1
+
+STATE: FOLLOW_UP_SENT
+If member replies yes, done, completed, went, finished:
+→ Update gap_status in fact_member_gap to Closed
+→ Update state to COMPLETED
+→ Update fact_nba_outreach_plan status to COMPLETED
+→ Log in fact_nba_trace: "Gap closed via WhatsApp 
+   conversation — member confirmed completion"
+→ Reply: "That is wonderful news! Thank you for 
+   taking care of your health. Your care team has 
+   been notified."
+→ Trigger re-evaluation of the campaign
+
+If member replies no, not yet, havent, did not:
+→ Update state to DECLINED
+→ Reply: "No worries! Would you like to schedule 
+   another appointment? Reply YES to get a new 
+   reminder or STOP to opt out."
+→ Flag for care manager escalation in member_evaluations
+→ Recommended action: CARE_MANAGER_CALL
+
+If no reply within 7 days of follow up:
+→ Update state to ESCALATED
+→ Recommended action: CARE_MANAGER_CALL
+
+Add a GET /conversations/{run_id} endpoint that 
+returns all WhatsApp conversations for a run with 
+their current state and appointment dates.
+
+Add a POST /conversations/send-followups endpoint 
+that checks all DATE_CONFIRMED conversations where 
+appointment_date + 3 days <= today and sends the 
+follow up message. Add this to the 24 hour scheduler.
+
+FIX 3 — Register the webhook with Twilio
+
+After creating the endpoint, print instructions for 
+how to register the webhook URL in Twilio console:
+Go to Twilio console → Messaging → Settings → 
+WhatsApp Sandbox Settings → set the webhook URL for 
+incoming messages to:
+http://[your-ngrok-url]/webhook/whatsapp
+
+Also install ngrok instructions since Twilio needs 
+a public URL to send webhooks to — the localhost:8000 
+is not publicly accessible.
+
+FIX 4 — Add conversation view to dashboard
+
+In the Evaluation tab add a new section below the 
+campaign performance table called 
+"WhatsApp Conversations":
+
+Show a table with columns:
+- Member
+- Gap measure
+- Outreach sent date
+- Conversation state (with colored badge)
+- Appointment date (if confirmed)
+- Follow up status
+- Last reply
+
+Color code the state badges:
+- OUTREACH_SENT — gray
+- AWAITING_DATE — amber (member said yes, waiting for date)
+- DATE_CONFIRMED — teal (appointment scheduled)
+- FOLLOW_UP_SENT — blue (checking in)
+- COMPLETED — green (gap closed via conversation)
+- DECLINED — red (member declined)
+- ESCALATED — red pulsing (needs care manager)
+
+This table reads from GET /conversations/{run_id} 
+and auto-refreshes every 30 seconds so replies 
+appear in real time during the demo.
+
+After all changes restart uvicorn and confirm:
+1. POST /webhook/whatsapp endpoint exists and returns 200
+2. New whatsapp_conversations table created in database
+3. Conversation state machine logic is correct
+4. Show me instructions for setting up ngrok
