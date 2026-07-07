@@ -1,108 +1,65 @@
-Since ngrok is blocked by Windows Defender on this 
-corporate sandbox, implement a WhatsApp conversation 
-simulator in the dashboard instead of a real webhook.
+Fix the expected closure rate logic in api.py 
+to be more realistic and measure-specific.
 
-This gives the same demo experience without needing 
-a public URL.
+Update the POST /evaluate/{run_id} endpoint 
+to calculate expected closure rate based on 
+the measure type and evaluation window rather 
+than a flat 20 percent.
 
-CHANGE 1 — Add conversation simulator to Evaluation tab
+Use these realistic expected closure rates 
+based on Healthcare Effectiveness Data and 
+Information Set industry benchmarks:
 
-In the WhatsApp Conversations section of the 
-Evaluation tab, add a simulator panel for each 
-conversation row.
+For evaluation_window = 7 days:
+- MAD (Medication Adherence for Diabetes): 
+  expected 45 percent — members refill quickly
+- AFV (Annual Flu Vaccine): 
+  expected 35 percent — easy to get, walk-in
+- CDC (Controlling Blood Pressure): 
+  expected 25 percent — requires BP check visit
+- EED (Eye Exam for Patients with Diabetes): 
+  expected 15 percent — requires specialist visit
+- BCS (Breast Cancer Screening): 
+  expected 12 percent — requires scheduling mammogram
+- COL (Colorectal Cancer Screening): 
+  expected 10 percent — requires prep, harder to schedule
+- SPC (Statin Use in Cardiovascular Disease): 
+  expected 40 percent — just needs prescription refill
 
-When the user clicks "Simulate Reply" on any 
-conversation row, show an inline conversation 
-thread panel that looks like a WhatsApp chat:
+For evaluation_window = 14 days:
+Multiply each 7-day rate by 1.8
 
-Left side — member messages (gray bubbles)
-Right side — CareIntel messages (teal bubbles)
+For evaluation_window = 30 days:
+These are the final expected closure rates:
+- MAD: 75 percent
+- AFV: 65 percent
+- CDC: 50 percent
+- EED: 35 percent
+- BCS: 30 percent
+- COL: 25 percent
+- SPC: 70 percent
 
-Show the initial outreach message that was sent 
-as the first CareIntel bubble.
+Update performance thresholds to be relative 
+to these measure-specific benchmarks:
+- On Track: actual rate within 15 percent 
+  of expected rate for that measure and window
+- Underperforming: actual rate more than 
+  15 percent below expected
+- Overperforming: actual rate more than 
+  15 percent above expected
 
-Then show 4 action buttons the demo operator 
-can click to simulate member replies:
+Also update the campaign_evaluations table 
+to store the measure_code so the correct 
+benchmark can be applied.
 
-Button 1 — "Member replies: Yes I will go"
-Button 2 — "Member replies: No not now"  
-Button 3 — "Member replies: [Date - July 15]"
-Button 4 — "Member replies: Yes completed"
+Add a tooltip or info icon next to the 
+Expected Rate column in the dashboard 
+Evaluation tab that shows:
+"Based on [measure_code] industry benchmark 
+for day [window] outreach. Source: HEDIS 
+national averages."
 
-When Button 1 is clicked:
-- Add gray bubble "Yes I will go" to conversation
-- Call POST /conversations/simulate with 
-  body: {contact_id, reply: "yes"}
-- Backend processes through state machine exactly 
-  as webhook would
-- Add teal bubble with system response asking for date
-- Show Button 3 as next available action
-- Hide Buttons 1 and 2
-
-When Button 3 is clicked:
-- Add gray bubble "July 15" to conversation
-- Call POST /conversations/simulate with 
-  body: {contact_id, reply: "july 15"}
-- Backend processes date and schedules follow up
-- Add teal bubble confirming appointment
-- Show "Fast forward to follow up" button that 
-  triggers the follow up message immediately 
-  without waiting for the actual date
-
-When "Fast forward to follow up" is clicked:
-- Add teal bubble with follow up message 
-  "Did you complete your appointment?"
-- Show Button 4 as next available action
-
-When Button 4 is clicked:
-- Add gray bubble "Yes completed"
-- Call POST /conversations/simulate with 
-  body: {contact_id, reply: "yes completed"}
-- Backend closes the gap in fact_member_gap
-- Add teal bubble "Wonderful news! Gap closed."
-- Update conversation state to COMPLETED
-- Update the campaign evaluation automatically
-- Show green COMPLETED badge on the row
-- Trigger campaign re-evaluation
-
-CHANGE 2 — Add POST /conversations/simulate endpoint to api.py
-
-This endpoint takes a contact_id and a reply text 
-and processes it through the exact same state machine 
-logic as POST /webhook/whatsapp would.
-
-This means the database updates, gap closures, 
-and evaluation triggers are all real — only the 
-input is simulated rather than coming from Twilio.
-
-Return the full conversation state and the 
-system response message so the dashboard can 
-display it.
-
-CHANGE 3 — Real time conversation display
-
-The conversation thread should feel like a real 
-WhatsApp chat:
-- Bubbles appear with a slight fade in animation
-- Timestamps shown on each bubble
-- Member name shown above gray bubbles
-- CareIntel shown above teal bubbles
-- Scrollable if conversation gets long
-- Show typing indicator (3 animated dots) for 
-  1 second before each system response appears
-
-CHANGE 4 — Conversation summary in campaign row
-
-After a conversation is completed update the 
-campaign row to show:
-- Conversation outcome: Completed / Declined / 
-  Escalated with appropriate color badge
-- Appointment date that was confirmed
-- Days from outreach to completion
-- A small WhatsApp icon indicating this gap 
-  was closed via conversational outreach
-
-This tells the full story in the campaign view 
-without needing to expand the conversation thread.
-
-Keep all existing visual design unchanged.
+After updating restart uvicorn and re-run 
+all existing evaluations by calling 
+POST /evaluate/run-scheduled and show me 
+the updated performance statuses.
