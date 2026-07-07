@@ -1,65 +1,56 @@
-Fix the expected closure rate logic in api.py 
-to be more realistic and measure-specific.
+Update the propensity score calculation in 
+setup_database.py and add a function in api.py 
+called calculate_propensity that computes a 
+more realistic propensity score for each member 
+gap using available signals in the database.
 
-Update the POST /evaluate/{run_id} endpoint 
-to calculate expected closure rate based on 
-the measure type and evaluation window rather 
-than a flat 20 percent.
+Use this formula:
 
-Use these realistic expected closure rates 
-based on Healthcare Effectiveness Data and 
-Information Set industry benchmarks:
+base_score = 0.50
 
-For evaluation_window = 7 days:
-- MAD (Medication Adherence for Diabetes): 
-  expected 45 percent — members refill quickly
-- AFV (Annual Flu Vaccine): 
-  expected 35 percent — easy to get, walk-in
-- CDC (Controlling Blood Pressure): 
-  expected 25 percent — requires BP check visit
-- EED (Eye Exam for Patients with Diabetes): 
-  expected 15 percent — requires specialist visit
-- BCS (Breast Cancer Screening): 
-  expected 12 percent — requires scheduling mammogram
-- COL (Colorectal Cancer Screening): 
-  expected 10 percent — requires prep, harder to schedule
-- SPC (Statin Use in Cardiovascular Disease): 
-  expected 40 percent — just needs prescription refill
+Adjustments:
++ 0.15 if digital_literacy_segment = High
++ 0.08 if digital_literacy_segment = Medium
+- 0.10 if digital_literacy_segment = Low
 
-For evaluation_window = 14 days:
-Multiply each 7-day rate by 1.8
++ 0.10 if previous_year_gap_flag = false 
+  (member closed gap last year — responsive)
+- 0.08 if previous_year_gap_flag = true 
+  (member missed last year too — harder to reach)
 
-For evaluation_window = 30 days:
-These are the final expected closure rates:
-- MAD: 75 percent
-- AFV: 65 percent
-- CDC: 50 percent
-- EED: 35 percent
-- BCS: 30 percent
-- COL: 25 percent
-- SPC: 70 percent
++ 0.05 if email_allowed = true AND 
+  sms_allowed = true (more channels available)
+- 0.05 if only one channel allowed
 
-Update performance thresholds to be relative 
-to these measure-specific benchmarks:
-- On Track: actual rate within 15 percent 
-  of expected rate for that measure and window
-- Underperforming: actual rate more than 
-  15 percent below expected
-- Overperforming: actual rate more than 
-  15 percent above expected
++ 0.10 if gap_status = Borderline 
+  (member is close to compliant — easier to push over)
+- 0.05 if gap_status = Partial
 
-Also update the campaign_evaluations table 
-to store the measure_code so the correct 
-benchmark can be applied.
+- 0.08 if do_not_contact_flag = true 
+  (should not even be here but safety check)
 
-Add a tooltip or info icon next to the 
-Expected Rate column in the dashboard 
-Evaluation tab that shows:
-"Based on [measure_code] industry benchmark 
-for day [window] outreach. Source: HEDIS 
-national averages."
++ 0.08 if socioeconomic_segment = High 
+  (better access to providers)
+- 0.05 if socioeconomic_segment = Low 
+  (access barriers)
 
-After updating restart uvicorn and re-run 
-all existing evaluations by calling 
-POST /evaluate/run-scheduled and show me 
-the updated performance statuses.
++ 0.05 for MAD and AFV measures 
+  (easier to close — pharmacy or walk-in)
+- 0.05 for COL and BCS measures 
+  (harder to close — requires scheduling)
+
+Cap final score between 0.10 and 0.95
+
+Update all existing rows in fact_member_gap 
+with recalculated propensity scores using 
+this formula.
+
+Also add a GET /member/{member_key}/propensity 
+endpoint that returns the propensity score 
+breakdown for a specific member showing each 
+factor and its contribution so the dashboard 
+can display an explainability panel.
+
+Show me a sample of 5 member gap rows before 
+and after the recalculation to verify the 
+scores changed meaningfully.
