@@ -1,56 +1,70 @@
-Update the propensity score calculation in 
-setup_database.py and add a function in api.py 
-called calculate_propensity that computes a 
-more realistic propensity score for each member 
-gap using available signals in the database.
+Fix the Stars impact calculation in api.py — 
+it is showing completely unrealistic values 
+like 34.62 actual and 7.5 projected which 
+would immediately discredit the demo.
 
-Use this formula:
+Here is how Stars impact should be calculated:
 
-base_score = 0.50
+CORRECT FORMULA:
 
-Adjustments:
-+ 0.15 if digital_literacy_segment = High
-+ 0.08 if digital_literacy_segment = Medium
-- 0.10 if digital_literacy_segment = Low
+Stars impact per gap closed = 
+(1 / total_eligible_members_for_measure_on_plan) 
+x star_weight x 0.5
 
-+ 0.10 if previous_year_gap_flag = false 
-  (member closed gap last year — responsive)
-- 0.08 if previous_year_gap_flag = true 
-  (member missed last year too — harder to reach)
+Where:
+- total_eligible_members = denominator size for 
+  that measure on that plan. Since we do not have 
+  real denominator data, estimate it as:
+  total members on that plan x eligibility_rate
+  
+  Use these eligibility rates per measure:
+  BCS: 30 percent of members (women 50-74)
+  COL: 45 percent of members (adults 45-75)
+  EED: 15 percent of members (diabetics 18-75)
+  CDC: 35 percent of members (hypertension)
+  MAD: 15 percent of members (diabetics on meds)
+  AFV: 80 percent of members (most members)
+  SPC: 20 percent of members (cardiovascular)
 
-+ 0.05 if email_allowed = true AND 
-  sms_allowed = true (more channels available)
-- 0.05 if only one channel allowed
+- star_weight = from dim_measure
+- 0.5 = each measure can move Stars by up to 
+  0.5 in the best case scenario
 
-+ 0.10 if gap_status = Borderline 
-  (member is close to compliant — easier to push over)
-- 0.05 if gap_status = Partial
+So for example:
+Plan P002 has roughly 500 members total
+EED eligibility = 15 percent = 75 eligible members
+Closing 5 EED gaps = 5/75 x 2 x 0.5 = 0.067 stars
 
-- 0.08 if do_not_contact_flag = true 
-  (should not even be here but safety check)
+IMPLEMENTATION:
 
-+ 0.08 if socioeconomic_segment = High 
-  (better access to providers)
-- 0.05 if socioeconomic_segment = Low 
-  (access barriers)
+In POST /evaluate/{run_id} calculate Stars impact as:
 
-+ 0.05 for MAD and AFV measures 
-  (easier to close — pharmacy or walk-in)
-- 0.05 for COL and BCS measures 
-  (harder to close — requires scheduling)
+For each gap closed in this campaign:
+stars_per_gap = (1 / estimated_denominator) 
+                x star_weight x 0.5
 
-Cap final score between 0.10 and 0.95
+stars_impact_actual = sum of stars_per_gap 
+for all actually closed gaps
 
-Update all existing rows in fact_member_gap 
-with recalculated propensity scores using 
-this formula.
+stars_impact_projected = sum of stars_per_gap 
+for all gaps that would close if campaign 
+hits expected closure rate
 
-Also add a GET /member/{member_key}/propensity 
-endpoint that returns the propensity score 
-breakdown for a specific member showing each 
-factor and its contribution so the dashboard 
-can display an explainability panel.
+Both values should be between 0.01 and 0.50 
+for any realistic single campaign.
+Cap at 0.50 as absolute maximum.
 
-Show me a sample of 5 member gap rows before 
-and after the recalculation to verify the 
-scores changed meaningfully.
+Also fix the portfolio summary in the 
+Evaluation tab header:
+STARS IMPACT ACTUAL should show total 
+projected Stars improvement across all 
+evaluated campaigns — this should be 
+a number between 0.1 and 1.0 for a 
+realistic portfolio, never above 1.5
+
+Update all existing evaluation records 
+with corrected Stars impact values by 
+re-running POST /evaluate/run-scheduled
+
+Show me the before and after values for 
+each campaign to confirm the fix worked.
