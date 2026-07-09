@@ -1,0 +1,308 @@
+Build a complete agentic loop for CareIntel.
+Create a new file called agent_loop.py.
+
+This file implements a real Claude agentic loop
+that replaces the simulated JavaScript decisions
+in the dashboard with genuine Claude AI reasoning.
+
+STEP 1 — Read the Anthropic API key from .env
+
+Add to .env:
+ANTHROPIC_API_KEY=your_key_here
+
+In agent_loop.py:
+import anthropic
+import sqlite3
+import json
+import threading
+from datetime import datetime
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+client = anthropic.Anthropic(
+    api_key=os.getenv('ANTHROPIC_API_KEY')
+)
+
+STEP 2 — Define database tools for Claude to use
+
+Create these functions that Claude can call 
+as tools during the loop:
+
+Tool 1: query_opportunities
+Queries careintel.db and returns all measure x plan 
+combinations with:
+- eligible member count (from fact_member_gap)
+- compliant member count (gap_status = Closed)
+- open gap count
+- average propensity score
+- member tier breakdown (T1/T2/T3 counts)
+- national benchmark from measure_benchmarks table
+- plan revenue from dim_plan_contract
+- star_weight from dim_measure
+
+Tool 2: query_members
+Takes measure_key and plan_key as parameters.
+Returns all members with open gaps for that 
+measure and plan including their digital literacy,
+language preference, socioeconomic segment,
+channel preferences, propensity score, 
+clinical risk score, and prior outreach history.
+
+Tool 3: write_opportunity_analysis
+Takes the Claude-generated opportunity analysis
+and writes it to a new table called 
+claude_opportunity_analysis with columns:
+analysis_id, nba_run_id, measure_key, plan_key,
+compliance_rate, benchmark_gap, stars_impact,
+cms_bonus_impact, total_outreach_cost,
+expected_closures, roi_ratio, 
+recommended_tier_strategy, claude_reasoning,
+confidence_level, created_timestamp
+
+Tool 4: write_session_decision
+Writes Claude's cohort and campaign decisions
+to fact_nba_claude_decision exactly as the 
+current agents do but with real Claude reasoning.
+
+Tool 5: write_trace
+Writes a trace entry to fact_nba_trace so the
+dashboard can show Claude's progress in real time.
+
+Tool 6: get_historical_performance
+Checks if any previous campaigns targeted this
+measure and plan. Returns actual closure rates
+from past runs if available. Returns None if
+no historical data exists.
+
+Tool 7: calculate_financial_impact
+Takes measure_key, plan_key, expected_closures
+as inputs. Computes Stars impact and CMS bonus
+using the corrected formula. Returns the 
+financial breakdown.
+
+STEP 3 — Build the main agent loop function
+
+def run_opportunity_analysis(nba_run_id: str):
+    
+    Write a trace entry: Analysis starting
+    
+    system_prompt = """
+    You are CareIntel's Healthcare Analytics AI,
+    analyzing Medicare Advantage plan data to 
+    identify the highest-value gap closure 
+    opportunities.
+    
+    Your job is to:
+    1. Query all available opportunity data
+    2. Analyze each measure x plan combination
+    3. Compute realistic financial projections
+       based on the actual data you see
+    4. Rank opportunities by net return on investment
+    5. For each top opportunity, segment members
+       into tiers based on their actual profiles
+    6. Write your analysis and reasoning to the database
+    7. Recommend which opportunities to pursue first
+       and why, in plain English a health plan PM
+       would understand
+    
+    Be specific about numbers. Explain your reasoning.
+    Never make up data — only use what the tools return.
+    If historical performance data exists for a measure,
+    use that instead of generic assumptions.
+    Always explain what signals drove your recommendations.
+    """
+    
+    messages = [{
+        "role": "user",
+        "content": f"""
+        Analyze all gap closure opportunities for 
+        run {nba_run_id}. 
+        
+        Start by querying all opportunities to see
+        what data is available. Then analyze each
+        measure x plan combination in detail.
+        Rank them by expected return on investment.
+        Write your analysis for the top 5 opportunities.
+        
+        For each opportunity explain:
+        - What the data shows about current performance
+        - Why this opportunity ranks where it does
+        - Which members to target first and why
+        - What realistic financial return to expect
+        - Any risks or caveats the PM should know
+        """
+    }]
+    
+    tools = [
+        define all 7 tools above in Anthropic 
+        tool format with proper schemas
+    ]
+    
+    Run the agentic loop:
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=system_prompt,
+            tools=tools,
+            messages=messages
+        )
+        
+        if response.stop_reason == "end_turn":
+            write final trace entry: Analysis complete
+            break
+            
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = execute_tool(
+                        block.name, block.input
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result)
+                    })
+                    write trace showing which tool 
+                    Claude called and what it returned
+            
+            messages.append({
+                "role": "assistant",
+                "content": response.content
+            })
+            messages.append({
+                "role": "user", 
+                "content": tool_results
+            })
+
+def run_session_loop(nba_run_id: str, 
+                     measure_key: str, 
+                     plan_key: str,
+                     mode: str = "automated"):
+    
+    This is the session agent loop that runs
+    the full 4-phase pipeline when a user starts
+    a session. It replaces the JavaScript simulation.
+    
+    Phase 1 — Opportunity Agent
+    Claude queries the data and confirms or refines
+    the selected opportunity. Writes to fact_nba_claude_decision.
+    
+    Phase 2 — Segmentation Agent  
+    Claude reads member profiles and creates cohorts
+    based on real member signals. Writes cohort
+    assignments to fact_nba_claude_decision.
+    
+    Phase 3 — Campaign Design Agent
+    Claude designs the campaign based on cohort
+    profiles, channel preferences, incentive budget,
+    and historical performance. Writes to dim_nba_campaign.
+    
+    Phase 4 — Outreach Agent
+    Claude generates the outreach plan with
+    personalized message text per member.
+    Writes to fact_nba_outreach_plan.
+    
+    At each phase write a trace entry so the
+    dashboard can show progress in real time.
+    
+    If mode is "manual" pause after each phase
+    and set status to AWAITING_CONFIRMATION
+    so the dashboard knows to wait for user input.
+    
+    If mode is "automated" run all phases
+    without pausing.
+
+STEP 4 — Add API endpoints to trigger the loop
+
+In api.py add:
+
+POST /analyze/{nba_run_id}
+Triggers run_opportunity_analysis in a background
+thread. Returns immediately with status "running".
+Dashboard polls GET /analyze/{nba_run_id}/status
+to get progress updates.
+
+GET /analyze/{nba_run_id}/status
+Returns all trace entries for this analysis run
+plus the current status (running, complete, failed).
+Also returns any claude_opportunity_analysis rows
+written so far so the dashboard can show results
+as they come in, not just at the end.
+
+GET /analyze/latest
+Returns the most recent completed analysis
+for display on the Opportunities tab.
+
+POST /session/start-loop
+Same as POST /session/start but triggers
+run_session_loop instead of the JavaScript simulation.
+Takes measure_key, plan_key, and mode (manual/automated).
+
+GET /session/{run_id}/loop-status
+Returns real-time loop progress including:
+- Current phase (1-4)
+- Claude's reasoning so far
+- Decisions written to database
+- Status: running, awaiting_confirmation, complete
+
+POST /session/{run_id}/confirm-phase
+For manual mode — user confirms the current phase
+and loop continues to next phase.
+
+STEP 5 — Update dashboard to use real loop
+
+In dashboard/index.html:
+
+When Opportunities tab loads, call GET /analyze/latest
+If a recent analysis exists show it.
+If not show a button "Run AI Analysis" that 
+calls POST /analyze/{new_run_id}.
+
+Show a live progress panel while analysis runs:
+"Claude is analyzing your opportunity data..."
+With real-time updates from GET /analyze/status
+showing each tool call Claude makes:
+"Querying EED x P002 data..."
+"Computing financial impact..."
+"Segmenting 143 eligible members..."
+"Writing opportunity analysis..."
+
+When analysis completes replace the progress
+panel with the financial opportunity cards
+showing Claude's actual computed numbers
+and reasoning.
+
+In Run Session tab:
+Change the Start Session button to call
+POST /session/start-loop instead of the
+current simulated flow.
+
+The stepper phases should update based on
+GET /session/{run_id}/loop-status polling.
+
+Claude's actual reasoning text should appear
+in each phase panel as it is generated,
+not pre-written simulation text.
+
+STEP 6 — Handle missing API key gracefully
+
+If ANTHROPIC_API_KEY is not in .env:
+- Log a warning on startup
+- All loop endpoints return status 503 with message
+  "Claude API key not configured. Contact your 
+   administrator to enable AI-powered analysis."
+- Dashboard shows a banner explaining the limitation
+- Fall back to the rule-based simulation automatically
+
+This way the product works in demo mode without
+the key and upgrades to real AI automatically
+when the key is added.
+
+After building run a test:
+1. If API key is available trigger POST /analyze/TEST001
+   and show me the trace entries as Claude works
+2. If no API key confirm the graceful fallback works
+3. Show me the agent_loop.py file structure
