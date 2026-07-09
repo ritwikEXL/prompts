@@ -1,122 +1,131 @@
-Replace all hardcoded values in api.py and 
-dashboard/index.html with values computed 
-dynamically from the data in careintel.db.
+Fix the following critical issues in the 
+Opportunities tab before we proceed to 
+the agentic loop:
 
-REPLACE 1 — Eligibility rates
-Do not hardcode eligibility rates per measure.
-Instead compute eligible member count directly:
+FIX 1 — Add realistic closed gaps to synthetic data
 
-For each measure x plan combination count the 
-members who appear in fact_member_gap for that 
-measure and plan. That IS the eligible population.
-Do not estimate it from total members x a rate.
+The database currently has almost no closed gaps
+which makes compliance rate show as 0 percent 
+everywhere. This looks wrong.
 
-eligible_members = SELECT COUNT(DISTINCT member_key) 
-FROM fact_member_gap 
-WHERE measure_key = X AND plan_key = Y
+Run this SQL to close a realistic proportion 
+of gaps to simulate a real plan's current 
+performance:
 
-compliant_members = SELECT COUNT(DISTINCT member_key)
-FROM fact_member_gap
-WHERE measure_key = X AND plan_key = Y
-AND gap_status = 'Closed'
+For each measure use these target compliance rates
+that reflect a struggling but not failing plan:
+BCS: close gaps until compliance reaches 55 percent
+COL: close gaps until compliance reaches 45 percent  
+EED: close gaps until compliance reaches 52 percent
+CDC: close gaps until compliance reaches 42 percent
+MAD: close gaps until compliance reaches 48 percent
+AFV: close gaps until compliance reaches 50 percent
+SPC: close gaps until compliance reaches 58 percent
 
-compliance_rate = compliant_members / eligible_members
+For each measure x plan combination calculate
+how many gaps need to be Closed to reach the
+target rate. Randomly select that many gap rows
+and update gap_status to Closed.
 
-REPLACE 2 — Plan revenue
-Do not hardcode plan revenue.
-Add a plan_annual_revenue column to dim_plan_contract 
-with these initial values that the user can update:
-P001: 450000000
-P002: 380000000
-P003: 280000000
-P004: 520000000
-P005: 180000000
+This will make compliance rates look realistic
+— below the national average but not at zero.
 
-But read it from the database not from hardcoded 
-Python or JavaScript. If a new plan is added with 
-no revenue set, show a prompt asking the user to 
-enter the plan revenue before financial analysis 
-can run.
+FIX 2 — Fix the Stars improvement cap
 
-REPLACE 3 — National benchmarks
-Store national benchmarks in a new database table:
+The 0.5000 cap is too aggressive — it is hitting
+on almost every opportunity making them all look
+equal. 
 
-CREATE TABLE IF NOT EXISTS measure_benchmarks (
-    measure_key TEXT,
-    benchmark_year INTEGER,
-    national_avg_rate REAL,
-    top_quartile_rate REAL,
-    bottom_quartile_rate REAL,
-    source TEXT,
-    last_updated TEXT
+Replace the flat cap with a proportional formula:
+
+stars_improvement = min(
+    (expected_closures / total_eligible) 
+    x star_weight x 0.5,
+    star_weight x 0.15
 )
 
-Seed with current values:
-M001 BCS: national 74, top 82, bottom 65
-M002 COL: national 68, top 78, bottom 58
-M003 EED: national 72, top 81, bottom 62
-M004 CDC: national 69, top 79, bottom 58
-M005 MAD: national 78, top 86, bottom 70
-M006 AFV: national 65, top 75, bottom 55
-M007 SPC: national 80, top 88, bottom 72
+The new cap is star_weight x 0.15 per campaign
+So EED (weight 2) caps at 0.30 Stars
+BCS (weight 1) caps at 0.15 Stars
+This creates meaningful differentiation between
+high-weight and low-weight measure opportunities.
 
-Read from this table in the API. 
-Add a GET /benchmarks endpoint that returns 
-all benchmarks.
-Add a PUT /benchmarks/{measure_key} endpoint 
-that lets the user update benchmarks when 
-NCQA publishes new ones each year.
+FIX 3 — Fix the ROI ratio display
 
-REPLACE 4 — Cost per member per tier
-Store outreach costs in a new table:
+The 999x cap exists because outreach costs are
+tiny compared to CMS bonus values. This is
+mathematically correct but misleading in display.
 
-CREATE TABLE IF NOT EXISTS outreach_costs (
-    cost_id TEXT PRIMARY KEY,
-    tier INTEGER,
-    channel TEXT,
-    base_cost REAL,
-    incentive_amount REAL,
-    total_cost REAL,
-    last_updated TEXT
-)
+Change the ROI display logic:
+- Never show a ratio above 500x
+- Instead of showing the ratio for very high ROI
+  opportunities, show the label "Exceptional ROI"
+  with a teal badge
+- Show the actual dollar figures prominently:
+  Cost: $513 → Bonus: $2.6M
+  That tells the story better than 999x
 
-Seed with:
-Tier 1, EMAIL, base 1.50, incentive 0, total 1.50
-Tier 1, SMS, base 0.50, incentive 0, total 0.50
-Tier 2, SMS, base 0.50, incentive 15, total 15.50
-Tier 2, EMAIL, base 1.50, incentive 15, total 16.50
-Tier 3, CALL, base 8.00, incentive 25, total 33.00
-Tier 3, WHATSAPP, base 0.10, incentive 25, total 25.10
+Also reconsider whether the CMS bonus calculation
+is realistic. The formula is:
+stars_improvement x plan_revenue x 0.05
 
-Add a GET /costs endpoint and a settings page 
-where the user can update these costs.
+For a small campaign improving Stars by 0.116
+on a $450M plan: 0.116 x 450M x 0.05 = $2.6M
 
-REPLACE 5 — Expected closure rates per tier
-Store these in a new table too:
+This is actually mathematically correct — a 
+0.1 Stars improvement on a large plan IS worth
+millions in bonus payments. The issue is the
+outreach cost is too low relative to the impact.
 
-CREATE TABLE IF NOT EXISTS closure_rate_assumptions (
-    measure_key TEXT,
-    tier INTEGER,
-    expected_rate REAL,
-    basis TEXT,
-    last_updated TEXT
-)
+So instead of capping the ratio, add a 
+confidence indicator:
+- ROI above 200x: show "High confidence ROI"
+  only if plan has 500+ eligible members
+- ROI above 200x with fewer than 50 eligible
+  members: show "Small cohort — verify with 
+  full plan data" warning badge
 
-Seed with current values but read from database.
-When historical outreach data exists for this 
-measure and plan, override the assumed rate with 
-the actual historical rate computed from past runs:
+FIX 4 — Fix budget optimizer totals
 
-historical_rate = closed_gaps_from_outreach / 
-                  total_members_outreached
+The $33.7M total is the sum of CMS bonus across
+all 14 campaigns on all 5 plans. This is wrong
+because:
+1. CMS pays bonus per plan contract separately
+2. A plan cannot improve by 0.5 Stars on every
+   measure simultaneously in one quarter
+3. The optimizer should show portfolio-level
+   impact conservatively
 
-If historical_rate exists use it.
-If not use the assumed rate from the table.
-Show in the UI which rate is being used and why.
+Fix: cap total portfolio Stars improvement at
+0.25 per plan per quarter in the optimizer.
+Total CMS bonus = sum across plans of 
+min(total_stars_improvement, 0.25) x plan_revenue x 0.05
 
-After all changes restart uvicorn and show me 
-the financial analysis for EED x P002 using 
-computed values — confirm compliance rate, 
-gap count, Stars impact, CMS bonus, and ROI 
-are all derived from database values not 
-hardcoded numbers.
+This will give a more realistic total of 
+$3M to $8M across the portfolio — still compelling
+but believable.
+
+FIX 5 — Add plan filter persistence to 
+benchmark chart and financial cards
+
+When a user selects a specific plan in the 
+Plan filter dropdown, ALL sections should 
+filter to that plan:
+- Benchmark chart shows only that plan's 
+  compliance rates
+- Financial cards show only that plan's 
+  opportunities
+- Stars forecast shows that plan specifically
+- Budget optimizer shows budget for that plan only
+
+Currently the filters only affect the cards
+but not the benchmark chart or Stars forecast.
+
+After all fixes restart uvicorn and show me
+sample numbers for BCS x Aurora MA-PD Choice:
+- Plan compliance rate (should be around 55%)
+- Gap to benchmark (should be around 19pp)
+- Stars improvement capped (should be around 0.12)
+- CMS bonus (should be around $2.7M)
+- ROI display (should show Exceptional ROI badge
+  not 999x)
