@@ -1,70 +1,137 @@
-Fix the Stars impact calculation in api.py — 
-it is showing completely unrealistic values 
-like 34.62 actual and 7.5 projected which 
-would immediately discredit the demo.
+Rebuild the Opportunities tab to show genuine 
+financial intelligence rather than just a ranked 
+table. This is the most important change to make 
+the product credible to a health plan product manager.
 
-Here is how Stars impact should be calculated:
+CHANGE 1 — Replace the opportunity radar table 
+with a financial opportunity analysis view
 
-CORRECT FORMULA:
+For each measure x plan combination calculate 
+and display:
 
-Stars impact per gap closed = 
-(1 / total_eligible_members_for_measure_on_plan) 
-x star_weight x 0.5
+Financial impact card showing:
+- Current compliance rate (gaps closed / total eligible)
+- National benchmark for this measure 
+  (use these realistic benchmarks:
+   BCS: 74 percent, COL: 68 percent, 
+   EED: 72 percent, CDC: 69 percent,
+   MAD: 78 percent, AFV: 65 percent, 
+   SPC: 80 percent)
+- Gap to benchmark (benchmark minus current rate)
+- Number of members with open gaps
+- Estimated Stars impact of closing all gaps
+  (use the corrected formula from earlier)
+- CMS bonus payment impact in dollars
+  (use this formula: 
+   stars_improvement x plan_revenue x 0.05
+   where plan_revenue is estimated as:
+   P001: 450 million, P002: 380 million,
+   P003: 280 million, P004: 520 million,
+   P005: 180 million)
 
-Where:
-- total_eligible_members = denominator size for 
-  that measure on that plan. Since we do not have 
-  real denominator data, estimate it as:
-  total members on that plan x eligibility_rate
-  
-  Use these eligibility rates per measure:
-  BCS: 30 percent of members (women 50-74)
-  COL: 45 percent of members (adults 45-75)
-  EED: 15 percent of members (diabetics 18-75)
-  CDC: 35 percent of members (hypertension)
-  MAD: 15 percent of members (diabetics on meds)
-  AFV: 80 percent of members (most members)
-  SPC: 20 percent of members (cardiovascular)
+Member tier breakdown showing:
+Tier 1 High likelihood (members with 
+nba_propensity_score above 0.70 AND 
+digital_literacy_segment = High):
+- Count, recommended channel: digital only
+- Cost per member: $2
+- Expected closure rate: 60 percent
 
-- star_weight = from dim_measure
-- 0.5 = each measure can move Stars by up to 
-  0.5 in the best case scenario
+Tier 2 Medium likelihood (propensity 0.45 to 0.70 
+OR digital literacy Medium):
+- Count, recommended channel: SMS plus incentive
+- Cost per member: $17 (includes $15 gift card)
+- Expected closure rate: 35 percent
 
-So for example:
-Plan P002 has roughly 500 members total
-EED eligibility = 15 percent = 75 eligible members
-Closing 5 EED gaps = 5/75 x 2 x 0.5 = 0.067 stars
+Tier 3 Low likelihood (propensity below 0.45 
+OR digital literacy Low OR language barrier):
+- Count, recommended channel: call plus voucher
+- Cost per member: $45 (includes $25 voucher)
+- Expected closure rate: 18 percent
 
-IMPLEMENTATION:
+Return on investment summary showing:
+- Total outreach cost (sum across all tiers)
+- Total expected closures
+- Expected Stars improvement
+- Expected CMS bonus payment increase
+- Net return (bonus increase minus outreach cost)
+- Return on investment ratio
 
-In POST /evaluate/{run_id} calculate Stars impact as:
+CHANGE 2 — Add a budget optimizer above the table
 
-For each gap closed in this campaign:
-stars_per_gap = (1 / estimated_denominator) 
-                x star_weight x 0.5
+Add a section at the top called 
+"Q3 Outreach Budget Optimizer"
 
-stars_impact_actual = sum of stars_per_gap 
-for all actually closed gaps
+Show a budget slider from $50,000 to $5,000,000
+that the PM can drag to set their available budget.
 
-stars_impact_projected = sum of stars_per_gap 
-for all gaps that would close if campaign 
-hits expected closure rate
+As they drag the slider, automatically recalculate:
+- Which opportunities can be fully funded
+- Which can only be partially funded
+  (e.g. only Tier 1 and Tier 2, not Tier 3)
+- Total expected Stars improvement within budget
+- Total expected CMS bonus payment increase
+- Net return on investment
 
-Both values should be between 0.01 and 0.50 
-for any realistic single campaign.
-Cap at 0.50 as absolute maximum.
+Show a ranked list of which campaigns to fund 
+first to maximize return on investment within 
+the budget constraint.
 
-Also fix the portfolio summary in the 
-Evaluation tab header:
-STARS IMPACT ACTUAL should show total 
-projected Stars improvement across all 
-evaluated campaigns — this should be 
-a number between 0.1 and 1.0 for a 
-realistic portfolio, never above 1.5
+This is a simple greedy allocation — sort 
+opportunities by return on investment ratio 
+descending, fund them in order until budget 
+is exhausted.
 
-Update all existing evaluation records 
-with corrected Stars impact values by 
-re-running POST /evaluate/run-scheduled
+CHANGE 3 — Add national benchmark comparison chart
 
-Show me the before and after values for 
-each campaign to confirm the fix worked.
+For each measure show a simple horizontal bar 
+comparison:
+- Gray bar: national average compliance rate
+- Teal bar: this plan's current compliance rate
+- Difference labeled clearly as the gap to close
+
+This makes it immediately visual that the plan 
+is below average on specific measures and by 
+how much.
+
+CHANGE 4 — Add a Stars forecast panel
+
+Show three scenarios for end of measurement year:
+
+Scenario 1 — Do nothing
+Current Stars trajectory if no outreach is run.
+Expected Stars at year end based on natural 
+closure rate of 5 percent without intervention.
+
+Scenario 2 — Standard outreach
+Digital only, Tier 1 members only.
+Expected Stars at year end.
+Cost and return on investment.
+
+Scenario 3 — Full optimized campaign
+All tiers, all opportunities, full budget.
+Expected Stars at year end.
+Cost and return on investment.
+
+Show these as three side-by-side cards with 
+a clear recommendation of which scenario 
+maximizes return on investment.
+
+CHANGE 5 — Add data source indicator
+
+Add a small banner at the top of the 
+Opportunities tab saying:
+"Currently showing synthetic demo data — 
+connect your Snowflake, Databricks, or 
+SQL data source to see your real opportunity pipeline"
+
+With a button "Connect Data Source" that for 
+now opens a modal showing the data connection 
+roadmap — Snowflake, Databricks, BigQuery, 
+SQL Server, CSV upload — with a "Coming soon" 
+badge on each except CSV upload which shows 
+a working upload button.
+
+Keep all existing visual design and teal color 
+scheme. This replaces the current opportunity 
+radar table entirely.
