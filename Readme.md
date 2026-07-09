@@ -70,3 +70,4 @@ Change 3 — Benchmark Chart (middle): Horizontal bars for each measure — teal
 Change 4 — Stars Forecast (below chart): Three scenarios — Do Nothing (+0.100★), Digital First (+0.237★, $3.3M return), Full Campaign (+0.383★, $7.4M return) with "★ RECOMMENDED" badge on the third.
 
 Change 5 — Data source banner (very top): Teal banner noting synthetic demo data with "Connect Data Source" button opening a modal listing Snowflake/Databricks/BigQuery/SQL Server (Coming Soon) + working CSV Upload.
+
