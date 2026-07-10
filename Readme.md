@@ -1,131 +1,71 @@
-Fix the following critical issues in the 
-Opportunities tab before we proceed to 
-the agentic loop:
+I'm working on CareIntel, a Medicare Stars Next Best Action platform.
+Project folder: C:\Users\vmuser\Documents\NBA_Claude_Cli
+Stack: dashboard/index.html (frontend), api.py (FastAPI backend, port 8000),
+careintel.db (SQLite).
 
-FIX 1 — Add realistic closed gaps to synthetic data
+CONTEXT: We just fixed compliance rate display (now shows 36-58% instead of
+0%), Stars improvement capping, and ROI badge display. But a deeper review
+surfaced that the underlying synthetic data scale is unrealistic, which is
+now the priority fix. Please address these in order — don't skip ahead,
+each step depends on the previous one:
 
-The database currently has almost no closed gaps
-which makes compliance rate show as 0 percent 
-everywhere. This looks wrong.
+STEP 1 — Scale up the synthetic member population
+- Current: 100 members across 5 plans x 7 measures produces cohorts of
+  1-30 members per plan x measure combination, which is far too small to
+  look like a real book of business.
+- Fix: regenerate the synthetic dataset in careintel.db with a much larger
+  member population (target: several thousand members, e.g. 5,000-10,000)
+  distributed realistically across the 5 plans, so each plan x measure
+  combination lands in the hundreds or low thousands of eligible members,
+  not single/low double digits.
+- Keep the existing schema (100 members, 7 measures, 5 plans, gaps table)
+  intact — just scale the row counts and update any generation script
+  accordingly. Preserve realistic variance in compliance rates per plan
+  (don't make them uniform).
 
-Run this SQL to close a realistic proportion 
-of gaps to simulate a real plan's current 
-performance:
+STEP 2 — Recalibrate CMS bonus calculations off real PMPM economics
+- Current: CMS bonus figures (e.g. $9.5M, $20.8M per single measure-plan
+  card) don't reconcile with a ~100-member population and read as
+  arbitrary large numbers.
+- Fix: rework the bonus calculation to be driven by actual Medicare
+  Advantage quality bonus payment methodology — i.e., bonus should scale
+  off per-member-per-month (PMPM) revenue x Stars rating bump x member
+  count, not a flat number assigned per measure/plan combo. Add a
+  configurable PMPM assumption (e.g. as a parameter in the database or
+  config file) so it's not hardcoded, and make sure summed bonus across
+  all 16 measure-plan cards produces a total that's plausible for a
+  several-thousand-member plan, not hundreds of millions from 100 members.
 
-For each measure use these target compliance rates
-that reflect a struggling but not failing plan:
-BCS: close gaps until compliance reaches 55 percent
-COL: close gaps until compliance reaches 45 percent  
-EED: close gaps until compliance reaches 52 percent
-CDC: close gaps until compliance reaches 42 percent
-MAD: close gaps until compliance reaches 48 percent
-AFV: close gaps until compliance reaches 50 percent
-SPC: close gaps until compliance reaches 58 percent
+STEP 3 — Fix the budget optimizer so it actually optimizes
+- Current: total cost across all "fully funded" campaigns is ~$1,483,
+  while the budget slider ranges $50K-$5M — the constraint never binds,
+  so dragging the slider does nothing.
+- Fix: once Step 1 scales up cohort sizes (and therefore outreach costs
+  scale up proportionally), re-test the optimizer at realistic budget
+  levels. It should show some campaigns NOT fully funded at lower budget
+  levels, with the greedy ROI-ranked allocation actually leaving gaps
+  unfunded until the budget increases. Add a visible "X campaigns funded
+  of Y, $Z unallocated" or similar indicator showing the trade-off.
 
-For each measure x plan combination calculate
-how many gaps need to be Closed to reach the
-target rate. Randomly select that many gap rows
-and update gap_status to Closed.
+STEP 4 — Add real ROI tiering
+- Current: every single opportunity card shows "Exceptional ROI" with no
+  variation, which makes the label meaningless for prioritization.
+- Fix: define ROI tiers (e.g. Marginal, Good, Strong, Exceptional) based
+  on actual ROI thresholds computed from the recalibrated bonus and cost
+  figures. Make sure the distribution across the 16 measure-plan cards
+  shows real variance — not everything landing in the top tier.
 
-This will make compliance rates look realistic
-— below the national average but not at zero.
+STEP 5 — Sanity check Stars improvement variance
+- Current: budget optimizer summary shows every plan at exactly +0.250
+  Stars improvement, suggesting all plans are hitting the same hardcoded
+  cap rather than being data-driven.
+- Fix: after Steps 1-2 are done, re-verify the star_weight x 0.15 cap
+  logic produces realistic variance across plans based on their actual
+  gap profiles, rather than every plan saturating the same value.
 
-FIX 2 — Fix the Stars improvement cap
+After each step, don't move to the next until you show me updated numbers
+so I can confirm they look realistic before we continue.
 
-The 0.5000 cap is too aggressive — it is hitting
-on almost every opportunity making them all look
-equal. 
-
-Replace the flat cap with a proportional formula:
-
-stars_improvement = min(
-    (expected_closures / total_eligible) 
-    x star_weight x 0.5,
-    star_weight x 0.15
-)
-
-The new cap is star_weight x 0.15 per campaign
-So EED (weight 2) caps at 0.30 Stars
-BCS (weight 1) caps at 0.15 Stars
-This creates meaningful differentiation between
-high-weight and low-weight measure opportunities.
-
-FIX 3 — Fix the ROI ratio display
-
-The 999x cap exists because outreach costs are
-tiny compared to CMS bonus values. This is
-mathematically correct but misleading in display.
-
-Change the ROI display logic:
-- Never show a ratio above 500x
-- Instead of showing the ratio for very high ROI
-  opportunities, show the label "Exceptional ROI"
-  with a teal badge
-- Show the actual dollar figures prominently:
-  Cost: $513 → Bonus: $2.6M
-  That tells the story better than 999x
-
-Also reconsider whether the CMS bonus calculation
-is realistic. The formula is:
-stars_improvement x plan_revenue x 0.05
-
-For a small campaign improving Stars by 0.116
-on a $450M plan: 0.116 x 450M x 0.05 = $2.6M
-
-This is actually mathematically correct — a 
-0.1 Stars improvement on a large plan IS worth
-millions in bonus payments. The issue is the
-outreach cost is too low relative to the impact.
-
-So instead of capping the ratio, add a 
-confidence indicator:
-- ROI above 200x: show "High confidence ROI"
-  only if plan has 500+ eligible members
-- ROI above 200x with fewer than 50 eligible
-  members: show "Small cohort — verify with 
-  full plan data" warning badge
-
-FIX 4 — Fix budget optimizer totals
-
-The $33.7M total is the sum of CMS bonus across
-all 14 campaigns on all 5 plans. This is wrong
-because:
-1. CMS pays bonus per plan contract separately
-2. A plan cannot improve by 0.5 Stars on every
-   measure simultaneously in one quarter
-3. The optimizer should show portfolio-level
-   impact conservatively
-
-Fix: cap total portfolio Stars improvement at
-0.25 per plan per quarter in the optimizer.
-Total CMS bonus = sum across plans of 
-min(total_stars_improvement, 0.25) x plan_revenue x 0.05
-
-This will give a more realistic total of 
-$3M to $8M across the portfolio — still compelling
-but believable.
-
-FIX 5 — Add plan filter persistence to 
-benchmark chart and financial cards
-
-When a user selects a specific plan in the 
-Plan filter dropdown, ALL sections should 
-filter to that plan:
-- Benchmark chart shows only that plan's 
-  compliance rates
-- Financial cards show only that plan's 
-  opportunities
-- Stars forecast shows that plan specifically
-- Budget optimizer shows budget for that plan only
-
-Currently the filters only affect the cards
-but not the benchmark chart or Stars forecast.
-
-After all fixes restart uvicorn and show me
-sample numbers for BCS x Aurora MA-PD Choice:
-- Plan compliance rate (should be around 55%)
-- Gap to benchmark (should be around 19pp)
-- Stars improvement capped (should be around 0.12)
-- CMS bonus (should be around $2.7M)
-- ROI display (should show Exceptional ROI badge
-  not 999x)
+Do NOT touch: Run Session tab, Evaluation tab, WhatsApp/Twilio, SendGrid,
+or agent_loop.py — those are out of scope for this fix and should stay
+exactly as-is.
