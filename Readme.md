@@ -1,61 +1,196 @@
-Fix the following, in order, and show me updated numbers after each before moving to the next:
+Redesign the Opportunities tab in dashboard/index.html 
+completely from scratch. Keep all existing API calls and 
+data sources but replace the entire layout with a clean 
+product manager focused flow.
 
-1. BUG: The "Max CMS Bonus" summary stat (currently showing $1.2M) does not
-   equal the sum of "CMS bonus (all closed)" across all 35 Financial
-   Opportunity Analysis cards -- summing even 5 of the 35 cards already
-   exceeds $1.2M. Find wherever "Max CMS Bonus" is computed and make it
-   equal the actual sum of the all-gaps-closed bonus value across all 35
-   cards, not a separately derived or cached figure.
+The new layout has 5 sections in this exact order.
+Remove the existing budget optimizer, benchmark chart, 
+Stars forecast, and financial cards layout entirely.
+Replace with the following:
 
-2. BUG: "Expected Stars improvement per plan" in the Q3 Outreach Budget
-   Optimizer shows an identical +0.300 for every single plan (MA-PD Choice,
-   MA-PD Premier, MA Value, MA-PD Signature, DSNP Community) regardless of
-   budget level or each plan's distinct gap profile and funded campaigns.
-   This should show real variance per plan based on which of that plan's
-   campaigns are actually funded at the current budget -- find why every
-   plan is saturating at the same value and fix it to be data-driven.
+SECTION 1 — YOUR STARS SITUATION
+This is the first thing the PM sees when they open 
+the tab. One clean banner card with dark teal background.
 
-3. CLARIFY/FIX: The Stars Forecast panel (Do Nothing / Digital First / Full
-   Campaign) for a selected plan does not change when the portfolio-wide
-   budget slider in the Q3 Outreach Budget Optimizer is moved. Confirm
-   whether this panel is intentionally independent (a standalone per-plan
-   simulator) or should be reading from the same funded-budget state as the
-   optimizer. Whichever it is, make it explicit in the UI -- e.g. label it
-   "Independent per-plan scenario, not tied to portfolio budget above" if
-   that's the intended design, or wire it to the shared budget state if not.
+Left side shows:
+- Plan selector dropdown (default to lowest Stars plan)
+- Current Stars rating shown large: "2.5★ Current"
+- Target Stars rating: "3.0★ Target"  
+- Gap label: "0.5★ to next tier"
+- CMS bonus at risk label: "This gap costs you 
+  $9M/year in CMS bonus payments"
+  (calculated as: Stars gap x plan_revenue x 0.05)
+- Measurement deadline: "147 days left in 
+  measurement year" (calculate from today to 
+  Dec 31 2026)
 
-4. LABELING: Add explicit scope labels next to every dollar and Stars
-   figure on the dashboard so scope is never ambiguous -- e.g. "$123K
-   needed (portfolio-wide, all 35 opportunities)" vs "$12K outreach cost
-   (this plan only, all measures)" vs "$887 cost (this measure x plan
-   combo only)". Right now multiple dollar figures at different scopes sit
-   next to each other with no indication of what each one covers, which
-   reads as contradictory even when the numbers are individually correct.
+Right side shows 3 stat boxes:
+- Open gaps: total open gap count for this plan
+- Members at risk: unique members with open gaps
+- Measures below benchmark: count of measures 
+  where this plan is below national average
 
-5. FEATURE: Add the ability to directly apply/run a selected Stars Forecast
-   scenario (Do Nothing / Digital First / Full Campaign) for the chosen
-   plan, rather than requiring the user to scroll down and act on each of
-   the 35 individual opportunity cards separately.
+This section answers: WHERE AM I LOSING MONEY?
 
-6. FEATURE: Add a portfolio-level "Realistic Achievable Outcomes" summary
-   showing, for the currently funded budget: (a) total probable member
-   closures this quarter -- sum of "Expected closures" across all currently
-   funded cards, driven by the real tier-propensity closure rates already
-   used per card, and (b) total probable net profit -- sum of "Net return"
-   across all currently funded cards. This should sit near the top of the
-   Opportunities view so a PM sees one clear "here's what will realistically
-   happen at this budget" figure without manually adding up 35 cards.
+SECTION 2 — TOP OPPORTUNITIES FOR THIS PLAN
+Below the banner, show the top 3 opportunities 
+for the selected plan ranked by net return.
 
-7. REDESIGN: The AI Opportunity Analysis panel (now running on the real
-   agentic loop against the Anthropic API) is currently a small widget at
-   the very top with only 3 ranked opportunities shown. Elevate it to be
-   the primary entry point of the Opportunities view -- make it the lead
-   experience a PM sees first, and make each recommendation's reasoning
-   expandable so the underlying trace/audit trail is visible on demand.
-   Do NOT delete or bury the detailed Financial Opportunity Analysis cards
-   underneath -- keep them as the supporting "show your work" layer the AI
-   recommendations are drawn from, since a PM will want to verify the AI's
-   numbers against the real per-card data, not just trust a black box.
+Each opportunity is a clean card with:
 
-After each fix, show me the updated numbers so I can confirm before you
-move to the next one.
+Left column:
+- Measure name and code badge
+- "X members have this gap open"
+- Progress bar: plan compliance vs national benchmark
+  e.g. "52% compliant vs 74% national average"
+- Gap to close in plain English:
+  "Close 18 more gaps to reach benchmark"
+
+Middle column — REALISTIC ACHIEVABLE OUTCOMES:
+This is the most important section.
+Title: "What you can realistically achieve"
+
+Show three member tiers with plain English labels:
+
+LIKELY TO ACT (Tier 1)
+These members have high propensity scores above 0.70
+and high digital literacy. They just need a reminder.
+Show: X members | Digital outreach only | $2/member
+Expected: Y members will complete (60% rate)
+Cost: $Z
+
+PROBABLY WILL ACT (Tier 2)  
+These members are reachable but need an incentive.
+Show: X members | SMS + $15 gift card | $17/member
+Expected: Y members will complete (35% rate)
+Cost: $Z
+
+NEED HIGH TOUCH (Tier 3)
+These members have barriers — language, access, 
+low digital literacy. Worth targeting if budget allows.
+Show: X members | Call + $25 voucher | $45/member
+Expected: Y members will complete (18% rate)
+Cost: $Z
+
+Below the tiers show:
+"If you target Tier 1 + Tier 2 only:"
+- Members contacted: X
+- Expected completions: Y
+- Total cost: $Z
+- Stars improvement: +0.XX★
+- CMS bonus gained: $XM
+- Net return: $XM
+- Highlighted in green: "Return on every $1 spent: $XX"
+
+Right column — CONFIDENCE INDICATOR:
+Show a simple confidence meter:
+
+HIGH CONFIDENCE if:
+- More than 20 eligible members
+- Historical outreach data exists for this measure
+- Plan compliance above 30%
+
+MEDIUM CONFIDENCE if:
+- 10 to 20 eligible members
+- No historical data, using industry benchmarks
+
+LOW CONFIDENCE if:
+- Fewer than 10 eligible members
+- Strongly recommend verifying with full plan data
+
+Below confidence show:
+"These projections are based on [synthetic demo data /
+your uploaded data]. Connect real claims data for 
+precise figures."
+
+At bottom of each card:
+A large teal button: "Launch This Campaign →"
+That calls the existing session start flow.
+
+SECTION 3 — PORTFOLIO VIEW (collapsed by default)
+A collapsible section titled "See all opportunities 
+for this plan"
+
+When expanded shows a simple clean table with columns:
+Measure | Open Gaps | Members | Est. Completions | 
+Est. Cost | Est. Bonus | Confidence
+
+No financial cards. No tier breakdowns. Just the table.
+Sorted by Net Return descending.
+
+At the bottom of the table:
+"Select All" checkbox and "Launch Selected Campaigns"
+button that starts a multi-campaign session.
+
+SECTION 4 — PORTFOLIO BUDGET PLANNER
+A simple clean section titled 
+"Q3 Budget Planner — How to spend your outreach budget"
+
+Show a budget input field (not a slider — a proper 
+dollar input field with preset buttons: 
+$50K, $100K, $250K, $500K, $1M, $2M)
+
+When budget is entered or preset clicked show:
+
+A simple two column layout:
+
+Left: WHAT TO DO WITH THIS BUDGET
+Ranked list of campaigns to fund:
+1. [Measure] x [Plan] — $X cost — $XM return — Fund ✓
+2. [Measure] x [Plan] — $X cost — $XM return — Fund ✓
+3. [Measure] x [Plan] — $X cost — $XM return — Partial ◑
+etc.
+
+Right: WHAT YOU GET BACK
+- Total campaigns funded: X of Y
+- Total members contacted: X
+- Realistic completions: X (not optimistic — 
+  use weighted average of tier closure rates)
+- Portfolio Stars improvement: +X.XX★ 
+  (capped at 0.25 per plan per quarter)
+- Total CMS bonus gained: $XM
+- Total outreach cost: $XM  
+- Net return: $XM
+- Note: "Projections assume industry-average 
+  response rates. Actual results depend on 
+  your member population."
+
+SECTION 5 — AI ANALYSIS (if API key is available)
+At the very bottom, a collapsible panel titled
+"AI Opportunity Analysis — powered by Claude"
+
+When expanded shows the agentic loop analysis output
+including Claude's reasoning about which opportunities
+to prioritize and why.
+
+If API key is not available show:
+"AI analysis requires Anthropic API access. 
+Contact your administrator to enable."
+
+GENERAL DESIGN RULES:
+- Remove all 999x ROI references entirely
+- Remove all references to composite scores
+- Never show a Stars improvement above 0.3 per plan
+- Never show a CMS bonus above plan_revenue x 0.02 
+  per single campaign
+- All dollar figures must have scope labels:
+  "(this measure only)" or "(this plan, all measures)"
+  or "(full portfolio)"
+- Use plain English everywhere — no jargon like 
+  nba_propensity_score or T1/T2/T3 — use 
+  Likely to Act / Probably Will Act / Need High Touch
+- Every number that is a projection must have a 
+  small gray label: "estimated" or "projected"
+- Confidence indicators on every financial projection
+
+Also fix these specific bugs while rebuilding:
+- Max CMS Bonus summary stat must equal the actual 
+  sum of per-opportunity CMS bonus values
+- Stars forecast must either react to budget changes
+  or be clearly labeled as independent of budget
+- All scope labels must be consistent throughout
+
+After rebuilding show me Section 1 and Section 2 
+for Aurora MA-PD Signature (P005, 2.5 stars) with 
+actual numbers from the database so I can verify 
+they are correct before checking the rest.
