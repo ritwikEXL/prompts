@@ -1,74 +1,78 @@
-Simplify all message delivery to use WhatsApp 
-only for now. Remove SMS and email delivery 
-attempts entirely for the current demo build.
+Host CareIntel publicly using Cloudflare Tunnel
+so Ankit and Rishi can access it from their laptops.
 
-STEP 1 — Update delivery logic in api.py
+STEP 1 — Download cloudflared
+Try downloading using PowerShell:
 
-For POST /send/message/{contact_id}:
-Regardless of what channel is assigned 
-(EMAIL, SMS, CALL, Spanish SMS, Mandarin SMS)
-always send via WhatsApp using Twilio sandbox.
+Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "cloudflared.exe"
 
-Use:
-from_ = os.getenv('TWILIO_WHATSAPP_NUMBER')
-to = 'whatsapp:' + os.getenv('TEST_SMS_NUMBER')
+If that fails try curl:
+curl -L -o cloudflared.exe https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe
 
-Remove all SendGrid email code entirely.
-Remove all regular Twilio SMS code entirely.
-Only keep the WhatsApp send logic.
+If both fail try downloading via Python:
+import urllib.request
+urllib.request.urlretrieve(
+    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe",
+    "cloudflared.exe"
+)
 
-STEP 2 — Update channel display in dashboard
+Show me which method worked and confirm 
+cloudflared.exe exists in the project folder.
 
-In the outreach plan table change all 
-channel badge labels to show:
-- EMAIL → WhatsApp (Email)
-- SMS → WhatsApp
-- CALL → WhatsApp (Call Script)
-- Spanish SMS → WhatsApp (Spanish)
-- Mandarin SMS → WhatsApp (Mandarin)
+STEP 2 — Start API tunnel
+Run the tunnel for FastAPI backend on port 8000:
+.\cloudflared.exe tunnel --url http://localhost:8000
 
-Keep the same color coding but add 
-WhatsApp icon to all channel badges.
+Capture the public URL it generates.
+It will look like:
+https://random-words.trycloudflare.com
 
-STEP 3 — Update historical outreach records
+Show me the API tunnel URL.
 
-Update all existing outreach plan records 
-to show SENT status since we are treating 
-all channels as WhatsApp for the demo:
+STEP 3 — Update dashboard API_BASE
+Once you have the API tunnel URL update 
+dashboard/index.html:
 
-UPDATE fact_nba_outreach_plan 
-SET status = 'SENT',
-sent_at = datetime('now', '-' || 
-(abs(random()) % 14 + 1) || ' days')
-WHERE status IN ('PLANNED', 'FAILED');
+Find the line that says:
+const API_BASE = ...
 
-STEP 4 — Test WhatsApp delivery
+Replace with:
+const API_BASE = 'https://[api-tunnel-url]';
 
-Call POST /send/message/ for one contact 
-from the latest run and confirm:
-1. WhatsApp message arrives on test phone
-2. Status updates to SENT in database
-3. No email or SMS errors appear
+Where [api-tunnel-url] is the actual URL 
+from Step 2.
 
-STEP 5 — Update GET /test/email and 
-GET /test/whatsapp endpoints
+STEP 4 — Start dashboard tunnel
+Run a second tunnel for the dashboard on port 8080:
+.\cloudflared.exe tunnel --url http://localhost:8080
 
-Remove GET /test/email endpoint or make 
-it return a message saying email delivery 
-is disabled in demo mode.
+Capture this public URL as well.
 
-Keep GET /test/whatsapp working as before.
+STEP 5 — Verify everything works
+Test both URLs:
 
-Add a note in the dashboard outreach plan 
-section saying:
-"Demo mode: all outreach delivered via 
-WhatsApp. Production deployment supports 
-Email, SMS, and IVR calls."
+1. Open the dashboard public URL in browser
+   Confirm it loads the CareIntel dashboard
+   
+2. Check API is accessible:
+   curl https://[api-tunnel-url]/opportunities
+   Confirm it returns JSON data
 
-After changes confirm:
-1. No SendGrid or Twilio SMS errors
-2. WhatsApp delivery working for all 
-   channel types
-3. All historical records showing SENT
-4. Dashboard outreach table shows 
-   WhatsApp badges correctly
+3. Confirm API Connected indicator shows 
+   green in the dashboard
+
+4. Load the Opportunities tab and confirm 
+   UHC Medicare Signature shows as default 
+   with correct data
+
+STEP 6 — Show me both URLs
+Display both public URLs clearly:
+
+Dashboard URL: https://xxx.trycloudflare.com
+API URL: https://yyy.trycloudflare.com
+
+These are what I will share with Ankit and Rishi.
+
+Important: Both tunnels must stay running 
+for the URLs to work. Keep them running 
+in background processes.
