@@ -1,196 +1,116 @@
-Redesign the Opportunities tab in dashboard/index.html 
-completely from scratch. Keep all existing API calls and 
-data sources but replace the entire layout with a clean 
-product manager focused flow.
+Fix the following issues in the redesigned 
+Opportunities tab:
 
-The new layout has 5 sections in this exact order.
-Remove the existing budget optimizer, benchmark chart, 
-Stars forecast, and financial cards layout entirely.
-Replace with the following:
+FIX 1 — Open gaps and members at risk counts are wrong
 
-SECTION 1 — YOUR STARS SITUATION
-This is the first thing the PM sees when they open 
-the tab. One clean banner card with dark teal background.
+The plan summary banner is showing 2006 open gaps 
+and 2047 members at risk for MA Value (P004). 
+This is impossible — we only have 250 total gap 
+rows in the entire database.
 
-Left side shows:
-- Plan selector dropdown (default to lowest Stars plan)
-- Current Stars rating shown large: "2.5★ Current"
-- Target Stars rating: "3.0★ Target"  
-- Gap label: "0.5★ to next tier"
-- CMS bonus at risk label: "This gap costs you 
-  $9M/year in CMS bonus payments"
-  (calculated as: Stars gap x plan_revenue x 0.05)
-- Measurement deadline: "147 days left in 
-  measurement year" (calculate from today to 
-  Dec 31 2026)
+Fix the query for open gaps count to:
+SELECT COUNT(*) FROM fact_member_gap 
+WHERE plan_key = selected_plan 
+AND gap_status IN ('Open', 'Borderline', 'Partial')
+AND is_suppressed = 0
 
-Right side shows 3 stat boxes:
-- Open gaps: total open gap count for this plan
-- Members at risk: unique members with open gaps
-- Measures below benchmark: count of measures 
-  where this plan is below national average
+Fix the members at risk count to:
+SELECT COUNT(DISTINCT member_key) FROM fact_member_gap
+WHERE plan_key = selected_plan
+AND gap_status IN ('Open', 'Borderline', 'Partial')
+AND is_suppressed = 0
 
-This section answers: WHERE AM I LOSING MONEY?
+Show me the corrected counts for all 5 plans 
+after fixing.
 
-SECTION 2 — TOP OPPORTUNITIES FOR THIS PLAN
-Below the banner, show the top 3 opportunities 
-for the selected plan ranked by net return.
+FIX 2 — Measures below benchmark count is wrong
 
-Each opportunity is a clean card with:
+A plan at 4.5 stars should not show 7 out of 7 
+measures below national average. The below benchmark 
+check must filter by plan_key not across all plans.
 
-Left column:
-- Measure name and code badge
-- "X members have this gap open"
-- Progress bar: plan compliance vs national benchmark
-  e.g. "52% compliant vs 74% national average"
-- Gap to close in plain English:
-  "Close 18 more gaps to reach benchmark"
+Fix the query to check each measure's compliance 
+rate specifically for the selected plan against 
+the national benchmark in measure_benchmarks table.
 
-Middle column — REALISTIC ACHIEVABLE OUTCOMES:
-This is the most important section.
-Title: "What you can realistically achieve"
+A measure is below benchmark only if:
+(closed gaps for this plan on this measure / 
+ eligible members for this plan on this measure) 
+< national_avg_rate from measure_benchmarks
 
-Show three member tiers with plain English labels:
+FIX 3 — Default plan should be lowest Stars rating
 
-LIKELY TO ACT (Tier 1)
-These members have high propensity scores above 0.70
-and high digital literacy. They just need a reminder.
-Show: X members | Digital outreach only | $2/member
-Expected: Y members will complete (60% rate)
-Cost: $Z
+When the Opportunities tab loads, automatically 
+select the plan with the lowest star_rating_current 
+from dim_plan_contract as the default.
 
-PROBABLY WILL ACT (Tier 2)  
-These members are reachable but need an incentive.
-Show: X members | SMS + $15 gift card | $17/member
-Expected: Y members will complete (35% rate)
-Cost: $Z
+This is P005 Aurora MA-PD Signature at 2.5 stars.
+This is the most urgent plan and most compelling 
+demo story — not MA Value at 4.5 stars.
 
-NEED HIGH TOUCH (Tier 3)
-These members have barriers — language, access, 
-low digital literacy. Worth targeting if budget allows.
-Show: X members | Call + $25 voucher | $45/member
-Expected: Y members will complete (18% rate)
-Cost: $Z
+FIX 4 — Launch Campaign button must connect to 
+Run Session tab
 
-Below the tiers show:
-"If you target Tier 1 + Tier 2 only:"
-- Members contacted: X
-- Expected completions: Y
-- Total cost: $Z
-- Stars improvement: +0.XX★
-- CMS bonus gained: $XM
-- Net return: $XM
-- Highlighted in green: "Return on every $1 spent: $XX"
+When the PM clicks "Launch This Campaign" on any 
+opportunity card:
+1. Store the selected measure_key and plan_key 
+   in session state
+2. Switch to the Run Session tab automatically
+3. Pre-populate the opportunity selection with 
+   the chosen measure and plan
+4. Show a banner at the top of Run Session saying:
+   "Launching campaign for [measure] on [plan] — 
+   pre-selected from Opportunities tab"
+5. Start Phase 1 of the session automatically
 
-Right column — CONFIDENCE INDICATOR:
-Show a simple confidence meter:
+This is the critical connection between the 
+Opportunities tab and the Run Session tab.
 
-HIGH CONFIDENCE if:
-- More than 20 eligible members
-- Historical outreach data exists for this measure
-- Plan compliance above 30%
+FIX 5 — Add scope labels to all financial figures
 
-MEDIUM CONFIDENCE if:
-- 10 to 20 eligible members
-- No historical data, using industry benchmarks
+Next to every dollar figure add a small gray 
+parenthetical scope label:
 
-LOW CONFIDENCE if:
-- Fewer than 10 eligible members
-- Strongly recommend verifying with full plan data
+- CMS bonus at risk: "$9M/year (this plan, 
+  all measures combined)"
+- Net return on opportunity card: "$325K 
+  (this measure only, realistic estimate)"  
+- Max CMS bonus on opportunity card: "$893K 
+  (if 100% of gaps closed, theoretical maximum)"
+- Every $1 spent figure: "$188 return per $1 
+  (estimated, based on industry average response rates)"
+- Budget planner totals: "(full portfolio, 
+  all funded campaigns)"
 
-Below confidence show:
-"These projections are based on [synthetic demo data /
-your uploaded data]. Connect real claims data for 
-precise figures."
+FIX 6 — ROI should vary by plan Stars rating
 
-At bottom of each card:
-A large teal button: "Launch This Campaign →"
-That calls the existing session start flow.
+A plan at 4.5 stars has less Stars upside than 
+a plan at 2.5 stars. The ROI calculation should 
+reflect this by adjusting the CMS bonus impact:
 
-SECTION 3 — PORTFOLIO VIEW (collapsed by default)
-A collapsible section titled "See all opportunities 
-for this plan"
+stars_upside_factor = (5.0 - star_rating_current) / 2.5
 
-When expanded shows a simple clean table with columns:
-Measure | Open Gaps | Members | Est. Completions | 
-Est. Cost | Est. Bonus | Confidence
+Apply this factor to the CMS bonus calculation:
+cms_bonus_impact = stars_improvement 
+                   x plan_revenue 
+                   x 0.05 
+                   x stars_upside_factor
 
-No financial cards. No tier breakdowns. Just the table.
-Sorted by Net Return descending.
+This means:
+P005 at 2.5 stars: factor = 1.0 (full bonus potential)
+P001 at 3.5 stars: factor = 0.6 (less upside)
+P004 at 4.5 stars: factor = 0.2 (minimal upside)
 
-At the bottom of the table:
-"Select All" checkbox and "Launch Selected Campaigns"
-button that starts a multi-campaign session.
+This makes the dashboard correctly show that 
+fixing gaps on a struggling plan is worth more 
+than fixing gaps on an already-strong plan.
 
-SECTION 4 — PORTFOLIO BUDGET PLANNER
-A simple clean section titled 
-"Q3 Budget Planner — How to spend your outreach budget"
-
-Show a budget input field (not a slider — a proper 
-dollar input field with preset buttons: 
-$50K, $100K, $250K, $500K, $1M, $2M)
-
-When budget is entered or preset clicked show:
-
-A simple two column layout:
-
-Left: WHAT TO DO WITH THIS BUDGET
-Ranked list of campaigns to fund:
-1. [Measure] x [Plan] — $X cost — $XM return — Fund ✓
-2. [Measure] x [Plan] — $X cost — $XM return — Fund ✓
-3. [Measure] x [Plan] — $X cost — $XM return — Partial ◑
-etc.
-
-Right: WHAT YOU GET BACK
-- Total campaigns funded: X of Y
-- Total members contacted: X
-- Realistic completions: X (not optimistic — 
-  use weighted average of tier closure rates)
-- Portfolio Stars improvement: +X.XX★ 
-  (capped at 0.25 per plan per quarter)
-- Total CMS bonus gained: $XM
-- Total outreach cost: $XM  
-- Net return: $XM
-- Note: "Projections assume industry-average 
-  response rates. Actual results depend on 
-  your member population."
-
-SECTION 5 — AI ANALYSIS (if API key is available)
-At the very bottom, a collapsible panel titled
-"AI Opportunity Analysis — powered by Claude"
-
-When expanded shows the agentic loop analysis output
-including Claude's reasoning about which opportunities
-to prioritize and why.
-
-If API key is not available show:
-"AI analysis requires Anthropic API access. 
-Contact your administrator to enable."
-
-GENERAL DESIGN RULES:
-- Remove all 999x ROI references entirely
-- Remove all references to composite scores
-- Never show a Stars improvement above 0.3 per plan
-- Never show a CMS bonus above plan_revenue x 0.02 
-  per single campaign
-- All dollar figures must have scope labels:
-  "(this measure only)" or "(this plan, all measures)"
-  or "(full portfolio)"
-- Use plain English everywhere — no jargon like 
-  nba_propensity_score or T1/T2/T3 — use 
-  Likely to Act / Probably Will Act / Need High Touch
-- Every number that is a projection must have a 
-  small gray label: "estimated" or "projected"
-- Confidence indicators on every financial projection
-
-Also fix these specific bugs while rebuilding:
-- Max CMS Bonus summary stat must equal the actual 
-  sum of per-opportunity CMS bonus values
-- Stars forecast must either react to budget changes
-  or be clearly labeled as independent of budget
-- All scope labels must be consistent throughout
-
-After rebuilding show me Section 1 and Section 2 
-for Aurora MA-PD Signature (P005, 2.5 stars) with 
-actual numbers from the database so I can verify 
-they are correct before checking the rest.
+After all fixes show me:
+1. Corrected open gaps and members at risk 
+   for all 5 plans
+2. Section 1 banner for P005 (2.5 stars) 
+   with all corrected numbers
+3. Top opportunity card for P005 with 
+   corrected ROI using stars_upside_factor
+4. Confirm Launch Campaign button navigates 
+   to Run Session tab
