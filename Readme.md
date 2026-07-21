@@ -1,166 +1,432 @@
-Fix the financial calculations permanently.
-The ROI is showing 3000x+ because tier member 
-counts are based on synthetic data (110 members) 
-but CMS bonus is based on full plan revenue.
-The fix is to scale tier counts to realistic 
-eligible population sizes.
+Implement a real agentic financial analysis loop 
+using the OpenRouter API key already in .env.
+This replaces ALL hardcoded closure rates, tier 
+thresholds, ROI calculations, and benchmark 
+comparisons with genuine Claude reasoning.
 
-Here is the exact correct calculation:
+IMPORTANT: The API key in .env is named 
+ANTHROPIC_API_KEY but contains an OpenRouter key.
+Use OpenAI client pointed at OpenRouter as already 
+configured in the codebase.
 
-STEP 1 — Get eligible population per measure x plan
+STEP 1 — Create financial_analysis_loop.py
 
-From plan_population table get total_members.
-Apply eligibility rates to get eligible pool:
-BCS: 28%, COL: 42%, EED: 12%, CDC: 32%,
-MAD: 12%, AFV: 75%, SPC: 18%
+This is a new file separate from agent_loop.py
+specifically for computing financial projections
+from whatever data is in the database.
 
-example: EED on P002 (38,000 members):
-eligible_pool = 38,000 x 12% = 4,560 members
+from openai import OpenAI
+from dotenv import load_dotenv
+import sqlite3
+import json
+import os
 
-STEP 2 — Get current compliance from our data
+load_dotenv()
 
-From fact_member_gap count closed vs total
-for this measure x plan:
-
-closed = COUNT WHERE gap_status = 'Closed'
-total_in_data = COUNT all rows
-compliance_rate = closed / total_in_data
-
-example: EED on P002 might show 
-68 closed out of 280 total = 24% compliance
-
-STEP 3 — Apply compliance rate to eligible pool
-
-compliant_in_plan = eligible_pool x compliance_rate
-open_gaps_realistic = eligible_pool - compliant_in_plan
-
-example: 4,560 x (1 - 0.24) = 3,466 open gaps
-
-STEP 4 — Split open gaps into tiers using 
-propensity distribution from our data
-
-From our synthetic data get propensity 
-distribution for this measure x plan:
-tier1_pct = % of open gaps with propensity > 0.70
-tier2_pct = % of open gaps with propensity 0.45-0.70
-tier3_pct = % of open gaps with propensity < 0.45
-
-Apply to realistic open gap count:
-tier1_count = open_gaps_realistic x tier1_pct
-tier2_count = open_gaps_realistic x tier2_pct
-tier3_count = open_gaps_realistic x tier3_pct
-
-example: if our data shows 30% T1, 50% T2, 20% T3:
-tier1 = 3,466 x 30% = 1,040 members
-tier2 = 3,466 x 50% = 1,733 members
-tier3 = 3,466 x 20% = 693 members
-
-STEP 5 — Calculate expected closures
-
-expected_closures = 
-    (tier1_count x 0.60) +
-    (tier2_count x 0.35) +
-    (tier3_count x 0.18)
-
-example:
-T1: 1,040 x 0.60 = 624
-T2: 1,733 x 0.35 = 606
-T3: 693 x 0.18 = 125
-Total expected closures: 1,355
-
-STEP 6 — Calculate Stars improvement
-
-stars_improvement = min(
-    (expected_closures / eligible_pool) 
-    x star_weight x 0.5,
-    star_weight x 0.10
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv('ANTHROPIC_API_KEY'),
+    default_headers={
+        "HTTP-Referer": "https://careintel.exl.com",
+        "X-Title": "CareIntel Financial Analysis"
+    }
 )
 
-example:
-(1,355 / 4,560) x 2 x 0.5 = 0.297
-capped at star_weight x 0.10 = 0.20
-stars_improvement = 0.20
+DB_PATH = os.getenv('DB_PATH', 'careintel.db')
 
-STEP 7 — Calculate CMS bonus
+Define these tools for Claude to use:
 
-plan_revenue from plan_population table
+TOOL 1: get_measure_data
+Input: measure_key (optional), plan_key (optional)
+Queries careintel.db and returns:
+- measure details (name, star_weight, clinical_description)
+- plan details (name, revenue, total_members, 
+  current_stars, target_stars)
+- Gap distribution: total gaps, open gaps, 
+  closed gaps, borderline, partial
+- Member profiles: distribution of 
+  digital_literacy, language_preference,
+  socioeconomic_segment, age_band
+- Channel consent: what % have email, sms, 
+  call allowed
+- Propensity distribution: min, max, mean, 
+  percentile distribution (25th, 50th, 75th)
+- Historical performance: if any previous 
+  campaigns exist for this measure x plan, 
+  return actual closure rates from 
+  fact_nba_outreach_plan joined with 
+  fact_member_gap
+- Prior year gap rate: % of gaps that were 
+  also open last year
 
-cms_bonus = stars_improvement x plan_revenue x 0.05
+TOOL 2: get_national_benchmarks
+Input: measure_key
+Returns from measure_benchmarks table:
+- national_avg_rate
+- top_quartile_rate  
+- bottom_quartile_rate
+If not in table, Claude should use its 
+training knowledge of HEDIS benchmarks.
 
-example:
-0.20 x $380,000,000 x 0.05 = $3,800,000
+TOOL 3: get_plan_population
+Input: plan_key
+Returns from plan_population table:
+- total_members
+- plan_revenue
+If not in table returns null and Claude 
+should estimate from context.
 
-STEP 8 — Calculate outreach cost using 
-REALISTIC tier counts not synthetic counts
+TOOL 4: write_financial_analysis
+Input: Full analysis object with these fields:
+{
+  measure_key: str,
+  plan_key: str,
+  analysis_version: str,
+  
+  eligible_population: int,
+  current_compliance_rate: float,
+  national_benchmark: float,
+  gap_to_benchmark: float,
+  open_gaps_count: int,
+  
+  tier_1: {
+    count: int,
+    definition: str,
+    closure_rate: float,
+    closure_rate_rationale: str,
+    cost_per_member: float,
+    cost_rationale: str,
+    expected_closures: int
+  },
+  tier_2: {same structure},
+  tier_3: {same structure},
+  
+  expected_total_closures: int,
+  stars_improvement: float,
+  stars_improvement_rationale: str,
+  cms_bonus_impact: float,
+  total_outreach_cost: float,
+  net_return: float,
+  return_per_dollar: float,
+  
+  confidence_level: str,
+  confidence_rationale: str,
+  key_risks: [str],
+  key_opportunities: [str],
+  recommended_approach: str,
+  plain_english_summary: str
+}
 
-total_outreach_cost = 
-    (tier1_count x 2) +
-    (tier2_count x 17) +
-    (tier3_count x 45)
+Writes to financial_analyses table in database.
+Returns the written record.
 
-example:
-(1,040 x 2) + (1,733 x 17) + (693 x 45)
-= $2,080 + $29,461 + $31,185
-= $62,726
+TOOL 5: get_intervention_complexity
+Input: measure_key
+Claude uses this to reason about how hard 
+this intervention is. Returns data from 
+fact_member_gap about:
+- Average days_open (longer = harder to close)
+- Previous year gap flag rate (chronic non-closers)
+- Average clinical risk score
+- Channel distribution of members with this gap
+Claude will use this to reason about 
+realistic closure rates.
 
-STEP 9 — Net return and display
+CREATE financial_analyses TABLE:
 
-net_return = cms_bonus - total_outreach_cost
-= $3,800,000 - $62,726 = $3,737,274
+CREATE TABLE IF NOT EXISTS financial_analyses (
+    analysis_id TEXT PRIMARY KEY,
+    measure_key TEXT,
+    plan_key TEXT,
+    source_id TEXT DEFAULT 'demo',
+    analysis_version TEXT,
+    
+    eligible_population INTEGER,
+    current_compliance_rate REAL,
+    national_benchmark REAL,
+    gap_to_benchmark REAL,
+    open_gaps_count INTEGER,
+    
+    tier_1_count INTEGER,
+    tier_1_definition TEXT,
+    tier_1_closure_rate REAL,
+    tier_1_closure_rationale TEXT,
+    tier_1_cost_per_member REAL,
+    tier_1_cost_rationale TEXT,
+    tier_1_expected_closures INTEGER,
+    
+    tier_2_count INTEGER,
+    tier_2_definition TEXT,
+    tier_2_closure_rate REAL,
+    tier_2_closure_rationale TEXT,
+    tier_2_cost_per_member REAL,
+    tier_2_expected_closures INTEGER,
+    
+    tier_3_count INTEGER,
+    tier_3_definition TEXT,
+    tier_3_closure_rate REAL,
+    tier_3_closure_rationale TEXT,
+    tier_3_cost_per_member REAL,
+    tier_3_expected_closures INTEGER,
+    
+    expected_total_closures INTEGER,
+    stars_improvement REAL,
+    stars_improvement_rationale TEXT,
+    cms_bonus_impact REAL,
+    total_outreach_cost REAL,
+    net_return REAL,
+    return_per_dollar REAL,
+    
+    confidence_level TEXT,
+    confidence_rationale TEXT,
+    key_risks TEXT,
+    key_opportunities TEXT,
+    recommended_approach TEXT,
+    plain_english_summary TEXT,
+    
+    created_timestamp TEXT,
+    claude_model_used TEXT
+)
 
-Instead of ROI ratio show:
-"Every $1 invested returns $60 in CMS bonus value"
-(net_return / total_outreach_cost = 59.6x)
+MAIN ANALYSIS FUNCTION:
 
-This is realistic and credible.
+def analyze_opportunity(measure_key: str, 
+                        plan_key: str,
+                        source_id: str = 'demo') -> dict:
 
-STEP 10 — Update all displays
+    system_prompt = """
+    You are a healthcare analytics expert specializing 
+    in Medicare Advantage Stars improvement programs.
+    You have deep knowledge of HEDIS measures, member 
+    outreach effectiveness, and CMS payment structures.
+    
+    Your job is to analyze a specific care gap 
+    opportunity and produce realistic, defensible 
+    financial projections that a VP of Quality at 
+    a health plan would trust.
+    
+    CRITICAL RULES:
+    - Never guess or fabricate data. Use only what 
+      the tools return.
+    - Base closure rates on the actual member profiles 
+      you see in the data — digital literacy, language, 
+      age, propensity scores, channel consent.
+    - Consider intervention complexity — a medication 
+      refill is not the same as a colonoscopy.
+    - If historical outreach data exists for this 
+      measure and plan, weight it heavily over 
+      generic benchmarks.
+    - Explain your reasoning for every number you 
+      produce — rationale fields must be specific 
+      not generic.
+    - Return realistic numbers. A plan with mostly 
+      low-literacy elderly Spanish-speaking members 
+      will have different closure rates than a plan 
+      with young digitally-engaged members even for 
+      the same measure.
+    - Stars improvement formula:
+      (expected_closures / eligible_population) 
+      x star_weight x 0.5
+      Cap at star_weight x 0.10 per campaign.
+    - CMS bonus: stars_improvement x plan_revenue x 0.05
+    - Cost per member must reflect actual channel 
+      costs — email $1.50, SMS $0.50 + incentive, 
+      call $8.00 + incentive. Do not use flat $2/$17/$45 
+      unless the member mix justifies it.
+    - Confidence level must be based on actual 
+      data quality — eligible population size, 
+      whether historical data exists, how representative 
+      the synthetic data is.
+    """
+    
+    messages = [{
+        "role": "user",
+        "content": f"""
+        Analyze the gap closure opportunity for 
+        measure {measure_key} on plan {plan_key}.
+        
+        Step 1: Get the measure and plan data 
+        using get_measure_data tool.
+        
+        Step 2: Get national benchmarks for 
+        this measure using get_national_benchmarks.
+        
+        Step 3: Get plan population data using 
+        get_plan_population.
+        
+        Step 4: Understand intervention complexity 
+        using get_intervention_complexity.
+        
+        Step 5: Based on everything you have seen, 
+        produce a complete financial analysis.
+        
+        For tier definitions — look at the actual 
+        member data you retrieved. Define tiers 
+        based on what the data shows, not generic 
+        cutoffs. For example if you see that 
+        members with propensity above 0.65 AND 
+        email consent AND high digital literacy 
+        make up a distinct group, define Tier 1 
+        as that group specifically.
+        
+        For closure rates — reason from the data.
+        Consider:
+        - How complex is this intervention?
+        - What is the member profile of each tier?
+        - Does historical data exist? If yes, 
+          use those actual rates.
+        - What channel mix is available for each tier?
+        - What is the prior year gap rate? 
+          High prior year rate means chronic 
+          non-closers — lower your closure estimate.
+        
+        Write your complete analysis using 
+        write_financial_analysis tool.
+        
+        In plain_english_summary write 3-4 sentences 
+        a PM at Aetna would understand — what the 
+        opportunity is, who to target, what it costs, 
+        what they get back. Be specific with numbers.
+        """
+    }]
+    
+    Run the agentic loop until Claude calls 
+    write_financial_analysis and returns.
+    Return the written analysis.
 
-Show realistic tier counts (1,040 / 1,733 / 693)
-not synthetic counts (23 / 61 / 26)
+def analyze_all_opportunities(source_id: str = 'demo'):
+    
+    Get all unique measure x plan combinations 
+    from fact_member_gap for this source_id.
+    
+    For each combination call analyze_opportunity.
+    
+    Return list of all analyses.
 
-Add label under tier breakdown:
-"Projected member counts based on estimated 
-eligible population of 4,560 members.
-Connect Snowflake for plan-specific figures."
+STEP 2 — Add API endpoints
 
-Update confidence indicator to use 
-eligible_pool not synthetic count:
-High: eligible_pool >= 5,000 AND 
-      historical data exists
-Medium: eligible_pool 1,000 to 4,999
-Low: eligible_pool < 1,000
+POST /financial/analyze/{measure_key}/{plan_key}
+Triggers analyze_opportunity for this combination.
+Returns the analysis result.
+If analysis already exists and is less than 
+24 hours old, return cached result.
+If older than 24 hours or force=true parameter, 
+re-run analysis.
 
-Show: "Medium confidence — estimated 4,560 
-eligible members (industry benchmark rates applied)"
+POST /financial/analyze-all
+Triggers analyze_all_opportunities in background.
+Returns immediately with job_id.
+Analysis runs asynchronously.
 
-EXPECTED RESULTS after fix for EED on P002:
-- Eligible pool: 4,560
-- Open gaps realistic: ~3,500
-- Tier 1: ~1,050 members
-- Tier 2: ~1,750 members  
-- Tier 3: ~700 members
-- Expected closures: ~1,350
-- Stars improvement: 0.20
-- CMS bonus: $3.8M
-- Outreach cost: ~$63K
-- Net return: ~$3.7M
-- Every $1 returns: ~$59
+GET /financial/analyze-all/status
+Returns how many analyses are complete vs pending.
 
-Run calculation for all 14 measure x plan 
-combinations and show me a summary table:
+GET /financial/analysis/{measure_key}/{plan_key}
+Returns the most recent analysis for this combination.
 
-Measure x Plan | Eligible | Open Gaps | 
-Expected Closures | Stars | Bonus | Cost | 
-Net Return | $1 returns $X
+GET /financial/analyses
+Returns all analyses sorted by net_return descending.
+This is what the Opportunities tab reads.
 
-All values in the "$1 returns $X" column 
-should be between 5x and 100x.
-If any exceed 100x show me why.
+STEP 3 — Update GET /opportunities to use 
+financial_analyses table
 
-Update the dashboard display to show 
-realistic tier counts and the 
-"Every $1 returns $X" format everywhere.
+Instead of computing financial projections 
+in Python on the fly, the opportunities 
+endpoint should:
 
-Remove all instances of ROI ratio numbers 
-above 100x from the UI.
+1. Check if financial_analyses has a recent 
+   result (less than 24 hours) for this 
+   measure x plan combination.
+2. If yes: return the Claude-generated analysis.
+3. If no: run analyze_opportunity on the fly, 
+   store result, return it.
+
+This means first load may be slower (Claude 
+is analyzing each opportunity) but subsequent 
+loads are instant from cache.
+
+Show the PM that Claude is analyzing:
+"AI is analyzing your opportunities... 
+Analyzing EED × Aetna Premier... (3 of 14)"
+
+STEP 4 — Update dashboard display
+
+In the opportunity cards show Claude's 
+actual reasoning not generic labels:
+
+Instead of:
+"Tier 1: High propensity, digital only, 60%"
+
+Show what Claude actually determined:
+"Tier 1: Members with propensity > 0.71, 
+email consent, and high digital literacy 
+(312 members). Eye exam requires specialist 
+scheduling — 43% expected closure based on 
+member engagement profile and low prior-year 
+repeat rate."
+
+Show Claude's plain_english_summary as 
+the card description.
+
+Show confidence with Claude's actual rationale:
+"Medium confidence — 4,560 estimated eligible 
+members, no historical outreach data for this 
+measure on this plan. Using member profile 
+analysis and HEDIS benchmarks."
+
+Add a small "AI Analysis" badge on each card 
+showing the Claude model used and timestamp.
+
+Add an expandable "View Full Reasoning" section 
+that shows Claude's complete rationale for 
+tier definitions, closure rates, and 
+Stars improvement calculation.
+
+STEP 5 — Handle new data automatically
+
+When a PM uploads new data via the Data Sources tab 
+and activates it, automatically trigger 
+POST /financial/analyze-all for the new source_id.
+
+Show a banner: "AI is analyzing your data... 
+This takes 2-3 minutes for a full portfolio analysis."
+
+When complete refresh the Opportunities tab 
+with Claude-generated projections for the 
+uploaded data.
+
+This means when a real PM at Aetna uploads 
+their actual member and gap data, Claude reads 
+their specific member profiles — age distribution, 
+language mix, digital literacy, channel consent, 
+historical response rates if available — and 
+generates projections tailored to their 
+actual population.
+
+STEP 6 — Test with our existing data
+
+After building run POST /financial/analyze-all
+for source_id = 'demo'
+
+Show me Claude's actual analysis output for:
+1. MAD on P004 — easy measure, should show 
+   high closure rates with Claude's reasoning
+2. COL on P001 — hard measure, should show 
+   low closure rates with reasoning
+3. EED on P002 — medium, should show 
+   medium rates
+
+The three analyses should look genuinely 
+different because Claude is reading different 
+data for each one.
+
+Show me the plain_english_summary Claude 
+generates for each of these three opportunities.
+
+These summaries should NOT look like 
+templates — they should reflect what 
+Claude actually found in the data.
+
+
+Also the render link gives error saying make sure 8000 is running, and its not working. fix that too in the latest push 
