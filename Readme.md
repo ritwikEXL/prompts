@@ -1,364 +1,377 @@
-Do two things in one prompt — fix the financial 
-model by adding realistic data volume, then build 
-the data source connector.
+Fix three issues in one prompt:
 
-PART 1 — Fix financial model by adding real data volume
+PART 1 — Fix ROI calculation permanently
 
-The core problem is our synthetic dataset is too small.
-We have 5 to 30 gaps per measure per plan but our 
-plan revenues assume 18,000 to 52,000 member plans.
-Fix this by adding realistic gap volumes directly 
-to the database.
+The ROI is showing 3000x+ because outreach cost 
+is tiny relative to CMS bonus. The root cause is 
+Stars improvement is calculated correctly against 
+the full eligible population but outreach cost 
+only reflects the small tier cohort we show.
 
-STEP 1A — Add realistic gap volumes to fact_member_gap
+This is actually mathematically correct — you spend 
+$946 to contact your best prospects and if that 
+moves the needle on a $380M plan the ROI IS massive.
 
-First check current gap counts per plan per measure:
-SELECT plan_key, measure_key, COUNT(*) as gaps,
-COUNT(CASE WHEN gap_status IN 
-('Open','Borderline','Partial') THEN 1 END) as open
-FROM fact_member_gap
-GROUP BY plan_key, measure_key
-ORDER BY plan_key, measure_key
+But it is misleading without context. Fix the display:
 
-Then add synthetic gap rows to bring counts 
-to realistic levels based on plan size:
+In the opportunity card ROI section:
 
-Target open gap counts per measure per plan:
+CHANGE 1: Show cost and bonus separately with 
+clear scope labels:
 
-P001 Aetna Medicare Choice (45,000 members):
-BCS: 800 open gaps (eligible: 12,600, compliance 94% closed → 6% open)
-COL: 1,200 open gaps (eligible: 18,900, compliance 94% closed)
-EED: 350 open gaps (eligible: 5,400, compliance 94% closed)
-CDC: 900 open gaps (eligible: 14,400, compliance 94% closed)
-MAD: 280 open gaps (eligible: 5,400, compliance 95% closed)
-AFV: 1,600 open gaps (eligible: 33,750, compliance 95% closed)
-SPC: 400 open gaps (eligible: 8,100, compliance 95% closed)
+Campaign Cost: $946
+(contacting 110 highest-priority members)
 
-P002 Aetna Medicare Premier (38,000 members):
-BCS: 650 open gaps
-COL: 950 open gaps
-EED: 280 open gaps
-CDC: 720 open gaps
-MAD: 220 open gaps
-AFV: 1,300 open gaps
-SPC: 320 open gaps
+Expected Stars Impact: +0.018★
+(across 5,400 total eligible members)
 
-P003 Aetna Medicare DSNP Community (28,000 members):
-BCS: 520 open gaps
-COL: 780 open gaps
-EED: 230 open gaps
-CDC: 620 open gaps
-MAD: 190 open gaps
-AFV: 980 open gaps
-SPC: 260 open gaps
+CMS Bonus Value: $1.7M
+(if Stars improvement is sustained across 
+measurement year — varies by plan contract)
 
-P004 UHC Medicare Advantage Value (52,000 members):
-BCS: 900 open gaps
-COL: 1,400 open gaps
-EED: 420 open gaps
-CDC: 1,050 open gaps
-MAD: 330 open gaps
-AFV: 1,900 open gaps
-SPC: 480 open gaps
+Net Campaign Return: $1.69M estimated
 
-P005 UHC Medicare Signature PPO (18,000 members):
-BCS: 320 open gaps
-COL: 480 open gaps
-EED: 140 open gaps
-CDC: 360 open gaps
-MAD: 110 open gaps
-AFV: 650 open gaps
-SPC: 170 open gaps
+Instead of showing ROI ratio as a number 
+(which always looks absurd) show it as:
 
-For each target count check how many gaps 
-already exist for that measure x plan combination.
-Add only the difference needed to reach the target.
+"Every $1 invested in this campaign could 
+generate $1,786 in CMS bonus value"
 
-When generating new gap rows:
-- Use member keys from dim_member cycling 
-  through all 250 members repeatedly with 
-  unique member_gap_key identifiers
-- Use format G_P001_BCS_00001 etc for new keys
-- gap_status: 85% Open, 10% Borderline, 5% Partial
-- gap_open_date: random between 2026-01-01 and 2026-04-01
-- days_open: calculated from gap_open_date to today
-- clinical_risk_score: random between 0.35 and 0.85
-- nba_propensity_score: random between 0.30 and 0.80
-- previous_year_gap_flag: true for 25% of new gaps
-- upstream_recommended_channel: distribute 
-  based on measure type:
-  MAD, AFV: 60% EMAIL, 30% SMS, 10% CALL
-  BCS, COL: 40% EMAIL, 35% SMS, 25% CALL
-  EED, CDC, SPC: 30% EMAIL, 30% SMS, 40% CALL
-- upstream_recommended_incentive:
-  GIFTCARD_15 for 40% of gaps
-  GIFTCARD_25 for 35% of gaps
-  TRANSPORT_VOUCHER for 15% of gaps
-  FIT_KIT_MAILER for COL measure gaps (10%)
-- is_suppressed: false for all new gaps
-- measurement_year: 2026
+Add a disclaimer below:
+"CMS bonus calculations assume Stars improvement 
+is maintained through measurement year end. 
+Actual bonus depends on performance across 
+all measures. Projections based on estimated 
+plan population — connect Snowflake for 
+plan-specific figures."
 
-STEP 1B — Add plan size reference table
+CHANGE 2: Add a simple visual instead of ratio
 
-CREATE TABLE IF NOT EXISTS plan_population (
-    plan_key TEXT PRIMARY KEY,
-    total_members INTEGER,
-    plan_revenue INTEGER,
-    last_updated TEXT
+Show a bar comparison:
+Campaign Cost:  ████ $946
+Expected Bonus: ████████████████████████ $1.7M
+
+This makes the value proposition clear without 
+showing an absurd multiplier.
+
+CHANGE 3: Remove ROI ratio number entirely
+Never show Xx or 3110x anywhere on the dashboard.
+Replace all ROI ratio displays with the 
+"Every $1 generates $X in CMS bonus value" 
+format with the disclaimer.
+
+PART 2 — Fix confidence indicator
+
+Update confidence rules based on actual 
+eligible member counts from fact_member_gap:
+
+HIGH CONFIDENCE:
+- eligible_members >= 500 for this measure x plan
+- AND historical outreach data exists in 
+  fact_nba_trace for this measure x plan
+Description: "Large member population with 
+historical response data. Projections are 
+reliable for budget planning."
+
+MEDIUM CONFIDENCE:
+- eligible_members between 50 and 499
+- OR eligible_members >= 500 but no historical data
+Description: "Moderate member population. 
+Projections based on industry benchmarks. 
+Connect full claims data for precise figures."
+
+LOW CONFIDENCE:
+- eligible_members < 50
+Description: "Small member cohort detected. 
+Projections may not be statistically reliable. 
+Strongly recommend verifying with full plan data 
+before committing budget."
+
+Update the confidence display to always show 
+the actual eligible member count:
+"Medium confidence — 280 eligible members 
+(industry benchmark rates applied)"
+
+Not "10-20 eligible members" — use real count.
+
+PART 3 — Fix Data Sources tab with full functionality
+
+The Data Sources tab is currently showing 
+a blank or incomplete UI. Rebuild it with 
+full working functionality.
+
+CORE CONCEPT — Multi-source workspace:
+
+The PM can have multiple data sources loaded 
+simultaneously and switch between them. All 
+three tabs (Opportunities, Run Session, 
+Evaluation) update based on the active source.
+
+Add a source_id column to these tables 
+if not already present:
+ALTER TABLE fact_member_gap 
+ADD COLUMN source_id TEXT DEFAULT 'demo';
+ALTER TABLE dim_member 
+ADD COLUMN source_id TEXT DEFAULT 'demo';
+ALTER TABLE dim_plan_contract 
+ADD COLUMN source_id TEXT DEFAULT 'demo';
+
+Add a data_sources registry table:
+CREATE TABLE IF NOT EXISTS data_sources (
+    source_id TEXT PRIMARY KEY,
+    source_name TEXT,
+    source_type TEXT,
+    file_name TEXT,
+    uploaded_at TEXT,
+    member_count INTEGER,
+    gap_count INTEGER,
+    plan_count INTEGER,
+    is_active INTEGER DEFAULT 0,
+    created_timestamp TEXT
 )
 
-INSERT values:
-P001: 45000 members, $450,000,000 revenue
-P002: 38000 members, $380,000,000 revenue
-P003: 28000 members, $280,000,000 revenue
-P004: 52000 members, $520,000,000 revenue
-P005: 18000 members, $180,000,000 revenue
-
-STEP 1C — Update financial calculations in api.py
-
-Update GET /opportunities to use real gap counts 
-from fact_member_gap directly — no scale factors needed 
-since we now have realistic data volumes.
-
-Use plan_revenue from plan_population table 
-instead of hardcoded values.
-
-Stars improvement formula:
-eligible_members = total gap rows for this 
-measure x plan (all statuses)
-
-stars_improvement = min(
-    (expected_closures / eligible_members)
-    x star_weight x 0.5,
-    star_weight x 0.10
+Insert default demo source:
+INSERT OR IGNORE INTO data_sources VALUES (
+    'demo',
+    'CareIntel Demo Database',
+    'sqlite',
+    'careintel.db',
+    datetime('now'),
+    250, 611, 5,
+    1,
+    datetime('now')
 )
 
-cms_bonus = stars_improvement x plan_revenue x 0.05
+ADD API ENDPOINTS:
 
-total_outreach_cost =
-    (tier1_count x 2) +
-    (tier2_count x 17) +
-    (tier3_count x 45)
+GET /data/sources
+Returns all data sources from data_sources table
+Including which one is currently active.
 
-net_return = cms_bonus - total_outreach_cost
-roi_ratio = net_return / total_outreach_cost
+POST /data/sources/activate/{source_id}
+Sets is_active = 1 for this source_id
+Sets is_active = 0 for all others
+Returns confirmation
+Also updates a global app state variable 
+active_source_id that all other endpoints 
+read from.
 
-Expected ROI range after this fix: 5x to 80x
-If above 100x add note: "Verify with full plan data"
+Update ALL data endpoints to filter by 
+active_source_id:
 
-STEP 1D — Update member tier breakdown
+GET /opportunities — filter fact_member_gap 
+WHERE source_id = active_source_id
 
-With realistic gap volumes the tier counts 
-should now be meaningful:
-Tier 1 (propensity above 0.70, high digital): 
-  roughly 15 to 25% of open gaps
-Tier 2 (propensity 0.45 to 0.70): 
-  roughly 45 to 55% of open gaps
-Tier 3 (propensity below 0.45 or low digital): 
-  roughly 20 to 30% of open gaps
+GET /members — filter dim_member 
+WHERE source_id = active_source_id
 
-Show member tier breakdown using actual 
-counts from the new realistic data.
+GET /gaps — filter fact_member_gap 
+WHERE source_id = active_source_id
 
-STEP 1E — Verify financial calculations
+GET /session/latest — no source filter needed 
+(sessions belong to all sources)
 
-After adding data show me sample calculation 
-for EED on P002 Aetna Medicare Premier:
-- Total eligible members (EED rows on P002)
-- Open gaps count
-- Tier 1 count, Tier 2 count, Tier 3 count
-- Expected closures
-- Stars improvement
-- CMS bonus
-- Total outreach cost
-- Net return
-- ROI ratio
+POST /data/upload/members — 
+generate unique source_id for upload
+source_id = 'upload_' + timestamp
+Insert all uploaded members with this source_id
+Insert row in data_sources table
+Automatically activate the new source
 
-This should show realistic numbers like:
-- 280 open EED gaps
-- Tier 1: 60 members, Tier 2: 130 members, 
-  Tier 3: 90 members
-- Expected closures: 85 members
-- Stars improvement: 0.018
-- CMS bonus: $342,000
-- Outreach cost: $8,670
-- Net return: $333,330
-- ROI: 38x
+POST /data/upload/gaps — same pattern
+POST /data/upload/plans — same pattern
 
-PART 2 — Build data source connector
+POST /data/upload/full — accepts a zip or 
+multiple files containing members, gaps, 
+and plans together. Processes all three 
+and creates one source_id for the set.
 
-Add a new Data Sources tab to dashboard/index.html
-between the CareIntel logo and Opportunities tab.
+GET /data/sources/{source_id}/summary
+Returns summary stats for a specific source:
+member_count, gap_count, plan_count,
+open_gap_count, measures_below_benchmark,
+top_opportunity_measure, top_opportunity_plan
 
-SECTION A — Current data status panel
+DELETE /data/sources/{source_id}
+Deletes all data for this source_id from 
+all tables. Cannot delete 'demo' source.
 
-Show a clean status table:
-Data Source    | Records | Status  | Last Updated
-Members        | 250     | Demo    | [date]
-Care Gaps      | [new]   | Demo    | [date]  
-Plans          | 5       | Demo    | [date]
-Run History    | 4       | Demo    | [date]
+BUILD THE DATA SOURCES TAB UI:
 
-Below the table:
-Banner in amber: "Using synthetic demo data — 
-connect your real data source for accurate 
-opportunity projections"
+SECTION 1 — Active data source banner
+At the very top show which source is active:
 
-Button: Reset to Demo Data (calls POST /data/reset)
+Green banner: "● Currently analyzing: 
+CareIntel Demo Database | 250 members | 
+15,000+ gaps | 5 plans"
 
-SECTION B — Connect data source
+With a Change Source button.
 
-Title: "Connect Your Data"
-Subtitle: "Replace demo data with your real 
-Medicare Advantage member and claims data"
+SECTION 2 — Data source switcher
+Show all available sources as clickable cards:
 
-Show 5 cards in a grid:
+DEMO SOURCE CARD (always first):
+Title: CareIntel Demo Database
+Type: SQLite badge
+Members: 250 | Gaps: 15,000+ | Plans: 5
+Status: Active (green) or Click to activate (gray)
+Info button: shows summary of demo data
 
-CARD 1 — CSV / Excel Upload (ACTIVE - orange button)
-Title: Upload CSV or Excel
-Description: Upload member roster, care gap 
-file, or plan configuration
-Supported formats: .csv, .xlsx, .xls
-Button: Upload Files
+UPLOADED SOURCE CARDS (one per upload):
+Title: [filename or custom name]
+Type: Excel/CSV badge
+Members: X | Gaps: X | Plans: X  
+Uploaded: [date]
+Status: Active or Click to activate
+Delete button (trash icon)
 
-CARD 2 — Snowflake (COMING SOON)
-Title: Snowflake Data Cloud
-Description: Connect directly to your 
-Snowflake warehouse via Snowflake MCP
-Badge: Coming Soon
+When any card is clicked:
+1. Call POST /data/sources/activate/{source_id}
+2. Show loading spinner on all three main tabs
+3. Reload Opportunities tab data for new source
+4. Show success banner: "Now analyzing [source name]"
 
-CARD 3 — Databricks (COMING SOON)  
-Title: Databricks Lakehouse
-Description: Connect to Delta tables with 
-member and claims data
-Badge: Coming Soon
+SECTION 3 — Add new data source
 
-CARD 4 — SQL Server (COMING SOON)
-Title: Microsoft SQL Server
-Description: Connect to on-premise or 
-Azure SQL Server
-Badge: Coming Soon
+Title: Connect a New Data Source
+Subtitle: Upload your Medicare Advantage 
+member and care gap data
 
-CARD 5 — BigQuery (COMING SOON)
-Title: Google BigQuery
-Description: Connect to BigQuery datasets 
-with claims and eligibility data
-Badge: Coming Soon
+CARD 1 — CSV/Excel Upload (ACTIVE):
+Large upload area with:
+- Drag and drop zone
+- "Or click to browse" link
+- Accepts: .csv, .xlsx, .xls
+- Max file size: 50MB
 
-SECTION C — CSV Upload flow
+Below drop zone show three upload type buttons:
+[Upload Members] [Upload Gaps] [Upload Plans]
+[Upload Full Dataset (ZIP)]
 
-When Upload Files is clicked show a modal:
+When file is dropped or selected:
+1. Show filename and size
+2. Auto-detect file type from columns
+3. Show column mapping preview
+4. Validate required columns
+5. Show: "Found X members / X gaps / X plans"
+6. Show Upload and Activate button
 
-Step 1 — Select data type
-Radio buttons:
-○ Member Roster (replaces member data)
-○ Care Gap File (replaces gap data)
-○ Plan Configuration (replaces plan data)
-○ Full Dataset (members + gaps + plans together)
+COLUMN VALIDATION:
 
-Step 2 — Download template
-Show Download Template button for selected type
-Templates should be CSV files with:
-- Headers matching our schema
-- 3 example rows with realistic sample data
-- A README row at top explaining each column
+For member files check for these columns 
+(case insensitive, allow common variations):
+Required: member_id (or member_key, MemberID)
+Required: date_of_birth (or DOB, birth_date)
+Optional with defaults: gender, language_preference,
+digital_literacy_segment, socioeconomic_segment,
+email_allowed, sms_allowed, call_allowed,
+preferred_channel, do_not_contact_flag
 
-Step 3 — Upload file
-Drag and drop area or click to browse
-Accept .csv and .xlsx files
-Show file name and size after selection
+For gap files check for:
+Required: member_id, measure_code, plan_id, 
+gap_status, gap_open_date
+Optional: clinical_risk_score, days_open,
+nba_propensity_score, previous_year_gap_flag
 
-Step 4 — Preview and validate
-After file selected show:
-- First 5 rows preview in a table
-- Column mapping: their column → our column
-- Any validation errors highlighted in red
-- Row count and data summary
+For plan files check for:
+Required: plan_id, plan_name, 
+current_star_rating, target_star_rating
+Optional: region, segment, annual_revenue,
+total_members
 
-Step 5 — Confirm import
-Button: Import X rows
-On confirm call appropriate upload endpoint
-Show progress bar during import
-Show success summary or error details
+Show clear error if required columns missing:
+"Missing required column: member_id. 
+Download our template to see the correct format."
 
-SECTION D — Download templates
+SECTION 4 — Download templates
 
-Three template download buttons:
-Download Member Template
-Download Gap Template  
-Download Plan Template
+Three clean download buttons:
+[↓ Member Template] [↓ Gap Template] [↓ Plan Template]
 
-Add these API endpoints to api.py:
+Each template CSV should include:
+- Header row with all column names
+- Row 2: description of each column
+- Rows 3-5: 3 realistic example rows
+- All using realistic values a healthcare 
+  analyst would recognize
 
-POST /data/upload/members
-Accepts multipart form file upload
-Reads CSV or Excel using pandas or csv module
-Validates required columns:
-  member_id, date_of_birth, gender,
-  language_preference, digital_literacy_segment,
-  socioeconomic_segment, email_allowed,
-  sms_allowed, call_allowed, preferred_channel,
-  do_not_contact_flag
-Maps uploaded columns to database schema
-Clears existing dim_member and 
-dim_member_channel_pref data
-Inserts new rows
-Returns: {imported: X, skipped: Y, errors: [...]}
+Member template example rows:
+M001,1952-03-15,F,EN,High,Mid,TRUE,TRUE,FALSE,EMAIL,FALSE
+M002,1948-07-22,M,ES,Low,Low,FALSE,TRUE,TRUE,CALL,FALSE
+M003,1955-11-08,F,ZH,Medium,Mid,TRUE,TRUE,TRUE,SMS,FALSE
 
-POST /data/upload/gaps
-Validates required columns:
-  member_id, measure_code, plan_id,
-  measurement_year, gap_status, gap_open_date,
-  clinical_risk_score, days_open
-Clears existing fact_member_gap data
-Inserts new rows
-Returns import summary
+Gap template example rows:
+M001,BCS,P001,2026,Open,2026-01-15,0.72,156,FALSE
+M002,EED,P001,2026,Borderline,2026-02-01,0.58,139,TRUE
+M003,CDC,P002,2026,Open,2026-03-10,0.81,101,FALSE
 
-POST /data/upload/plans
-Validates required columns:
-  plan_id, plan_name, region, segment,
-  current_star_rating, target_star_rating,
-  annual_revenue, total_members
-Clears existing dim_plan_contract and 
-plan_population data
-Inserts new rows
-Returns import summary
+Plan template example rows:
+P001,Aetna Medicare Choice PPO,Northeast,MAPD,3.5,4.0,450000000,45000
+P002,Aetna Medicare Premier PPO,Southeast,MAPD,4.0,4.5,380000000,38000
 
-GET /data/templates/members
-Returns CSV file download with headers and 
-3 example rows
+SECTION 5 — Coming soon connectors
 
-GET /data/templates/gaps
-Returns CSV file download
+Show in a muted gray row below the upload section:
 
-GET /data/templates/plans
-Returns CSV file download
+Snowflake | Databricks | SQL Server | BigQuery | 
+Azure Synapse | Redshift
 
-GET /data/status
-Returns current data status:
-{
-  members: {count: X, source: "demo", updated: "date"},
-  gaps: {count: X, source: "demo", updated: "date"},
-  plans: {count: X, source: "demo", updated: "date"},
-  runs: {count: X}
-}
+Each with a Coming Soon badge and 
+"Notify me" button that just shows 
+a toast: "We'll notify you when 
+[connector] is available"
 
-POST /data/reset
-Runs seed_demo_data.py to restore all demo data
-Returns confirmation and new row counts
+WIRE UP DASHBOARD TABS TO ACTIVE SOURCE:
 
-After building test the full upload flow:
-1. Download the member template
-2. Add 5 new test rows to it
-3. Upload it via the modal
-4. Confirm the 5 members appear in the database
-5. Check that Opportunities tab still loads correctly
-6. Verify GET /data/status shows updated counts
+In dashboard/index.html add a global variable:
+let activeSourceId = 'demo';
+let activeSourceName = 'CareIntel Demo Database';
 
-Show me:
-1. EED on P002 financial calculation with 
-   realistic data (from Part 1)
-2. Data Sources tab rendering in dashboard
-3. Upload test results for the 5 member test
-4. Template download working for all 3 types
-5. Reset endpoint working correctly
+When data source is switched:
+activeSourceId = newSourceId;
+activeSourceName = newSourceName;
+
+Pass activeSourceId as a query parameter 
+to all API calls:
+fetch(`${API_BASE}/opportunities?source_id=${activeSourceId}`)
+fetch(`${API_BASE}/members?source_id=${activeSourceId}`)
+etc.
+
+Update the nav bar to always show which 
+source is active:
+Small indicator next to CareIntel logo:
+"● Demo Data" or "● [filename]"
+
+When source changes refresh:
+- Opportunities tab data
+- Any open session data
+- Evaluation tab campaign list
+
+After building test the full flow:
+
+TEST 1: Demo source
+Click CareIntel Demo Database card
+Confirm Opportunities tab shows demo data
+Confirm member count shows 250
+
+TEST 2: Upload a test Excel file
+Create a test file with 10 members and 
+20 gaps using the template format
+Upload it via the upload area
+Confirm it appears as a new source card
+Click to activate it
+Confirm Opportunities tab updates to show 
+analysis of the 10 test members
+Confirm member count changes to 10
+
+TEST 3: Switch back to demo
+Click demo source card
+Confirm Opportunities tab returns to demo data
+
+TEST 4: Delete uploaded source
+Click delete on the test upload
+Confirm it is removed from source list
+Confirm demo source remains
+
+Show me results of all 4 tests and 
+any errors encountered.
